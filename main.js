@@ -42,9 +42,16 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// ===== DATABASE (ONLY ONE) =====
+// ===== DATABASE FIX (FINAL) =====
+const mongoURI = process.env.MONGO_URI;
+
+if (!mongoURI) {
+  console.error("❌ MONGO_URI is missing!");
+  process.exit(1);
+}
+
 try {
-  await mongoose.connect(process.env.MONGO_URI_MAIN);
+  await mongoose.connect(mongoURI);
   console.log("✅ MongoDB Connected");
 } catch (err) {
   console.error("❌ MongoDB FAILED:", err.message);
@@ -74,16 +81,23 @@ const calcElo = (score, elo, streak) => {
   return Math.round(gain);
 };
 
-// ===== ROLE SYSTEM =====
+// ===== ROLE SYSTEM FIXED =====
 async function applyRank(member, elo) {
   try {
-    let config =
-      await GuildConfig.findOne({ guildId: member.guild.id }) ||
-      await GuildConfig.create({ guildId: member.guild.id });
+    let config = await GuildConfig.findOne({ guildId: member.guild.id });
+
+    if (!config) {
+      config = await GuildConfig.create({
+        guildId: member.guild.id,
+        rankRoles: {}
+      });
+    }
 
     const rank = getRank(elo);
 
-    let roleId = config.rankRoles.get(rank.name);
+    if (!config.rankRoles) config.rankRoles = {};
+
+    let roleId = config.rankRoles[rank.name];
     let role = member.guild.roles.cache.get(roleId);
 
     if (!role) {
@@ -91,12 +105,16 @@ async function applyRank(member, elo) {
         name: rank.name,
         color: rank.color
       });
-      config.rankRoles.set(rank.name, role.id);
+
+      config.rankRoles[rank.name] = role.id;
       await config.save();
     }
 
-    await member.roles.remove([...config.rankRoles.values()]).catch(() => {});
-    await member.roles.add(role);
+    // remove old ranks safely
+    const allRoles = Object.values(config.rankRoles);
+    await member.roles.remove(allRoles).catch(() => {});
+
+    await member.roles.add(role).catch(() => {});
   } catch (err) {
     console.error("Role error:", err.message);
   }
@@ -107,7 +125,9 @@ client.once("ready", async () => {
   console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }],
+    activities: [
+      { name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }
+    ],
     status: "online"
   });
 
@@ -123,6 +143,7 @@ client.once("ready", async () => {
   ].map(c => c.toJSON());
 
   await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+
   console.log("✅ Commands synced");
 });
 
@@ -131,11 +152,10 @@ client.on("interactionCreate", async i => {
   try {
     if (i.isChatInputCommand()) {
 
-      // PROFILE
       if (i.commandName === "profile") {
         const user = await User.findOneAndUpdate(
           { userId: i.user.id },
-          { username: i.user.username },
+          { username: i.user.username, elo: 1000, streak: 0 },
           { upsert: true, new: true }
         );
 
@@ -153,7 +173,6 @@ client.on("interactionCreate", async i => {
         return i.reply({ embeds: [embed] });
       }
 
-      // QUALITY METHOD (SAFE)
       if (i.commandName === "quality_method") {
         await i.deferReply();
 
@@ -178,12 +197,12 @@ client.on("interactionCreate", async i => {
 
           await fs.unlink(input).catch(() => {});
           await fs.unlink(output).catch(() => {});
-        } catch {
+        } catch (err) {
+          console.error(err);
           await i.editReply("❌ Processing failed");
         }
       }
 
-      // SUBMIT
       if (i.commandName === "submit") {
         const modal = new ModalBuilder()
           .setCustomId("submit")
@@ -195,6 +214,7 @@ client.on("interactionCreate", async i => {
               .setCustomId("url")
               .setLabel("Clip URL")
               .setStyle(TextInputStyle.Short)
+              .setRequired(true)
           )
         );
 
@@ -231,7 +251,7 @@ client.on("interactionCreate", async i => {
 
       const user =
         await User.findOne({ userId }) ||
-        await User.create({ userId, elo: 1000 });
+        await User.create({ userId, elo: 1000, streak: 0 });
 
       const gain = calcElo(Number(score), user.elo, user.streak);
 
@@ -244,7 +264,7 @@ client.on("interactionCreate", async i => {
       if (member) await applyRank(member, user.elo);
 
       return i.update({
-        content: `✅ +${gain} ELO`,
+        content: `✅ ${gain > 0 ? "+" : ""}${gain} ELO`,
         components: []
       });
     }
@@ -258,7 +278,7 @@ client.on("interactionCreate", async i => {
 client.on("guildMemberAdd", async member => {
   await User.findOneAndUpdate(
     { userId: member.id },
-    { elo: 1000, username: member.user.username },
+    { elo: 1000, streak: 0, username: member.user.username },
     { upsert: true }
   );
 
