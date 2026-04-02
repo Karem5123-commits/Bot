@@ -1,49 +1,28 @@
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
-import fs from "fs/promises";
-import path from "path";
-import fetch from "node-fetch";
-import { v4 as uuid } from "uuid";
+export const RANKS = [
+  { name: "Bronze", mmr: 0, color: 0x8d6e63 },
+  { name: "Silver", mmr: 1200, color: 0xb0bec5 },
+  { name: "Gold", mmr: 1800, color: 0xf1c40f },
+  { name: "Platinum", mmr: 2500, color: 0x00bcd4 },
+  { name: "Diamond", mmr: 3500, color: 0x3498db },
+  { name: "Master", mmr: 4800, color: 0x9b59b6 },
+  { name: "Legend", mmr: 6500, color: 0xe74c3c }
+];
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+export function getRank(mmr) {
+  return [...RANKS].reverse().find(r => mmr >= r.mmr) || RANKS[0];
+}
 
-export async function processVideo(url) {
-    const input = `temp_${uuid()}.mp4`;
-    const output = `out_${uuid()}.mp4`;
+export function calcElo(score, elo, streak) {
+  let gain = (score - 5.5) * 50;
+  if (streak >= 3) gain *= 1.5;
+  if (elo > 3500) gain *= 0.7;
+  return Math.round(gain);
+}
 
-    try {
-        // Download video
-        const res = await fetch(url);
-        const buffer = Buffer.from(await res.arrayBuffer());
-        await fs.writeFile(input, buffer);
+export async function applyRank(member, mmr) {
+  const rank = getRank(mmr);
+  let role = member.guild.roles.cache.find(r => r.name === rank.name)
+    || await member.guild.roles.create({ name: rank.name, color: rank.color });
 
-        // Process (MAX QUALITY MODE)
-        await new Promise((resolve, reject) => {
-            ffmpeg(input)
-                .videoFilters([
-                    "scale=2560:-1:flags=lanczos",
-                    "eq=contrast=1.15:brightness=0.05:saturation=1.2",
-                    "unsharp=7:7:1.5",
-                    "fps=60"
-                ])
-                .outputOptions([
-                    "-c:v libx264",
-                    "-preset veryfast",
-                    "-crf 18",
-                    "-movflags +faststart"
-                ])
-                .on("end", resolve)
-                .on("error", reject)
-                .save(output);
-        });
-
-        return output;
-
-    } catch (err) {
-        console.error("Video Processing Error:", err);
-        throw err;
-    } finally {
-        // CLEANUP (critical for Railway)
-        await fs.unlink(input).catch(() => {});
-    }
+  await member.roles.add(role).catch(()=>{});
 }
