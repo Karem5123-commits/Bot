@@ -7,8 +7,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "start": "node main.js",
-    "build": "npm install"
+    "start": "node main.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
