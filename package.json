@@ -1,22 +1,24 @@
 {
-  "name": "omega-overlord-prime",
-  "version": "5.0.0",
+  "name": "omega-discord-bot",
+  "version": "3.0.0",
+  "description": "Elite ranking + quality processing bot",
   "main": "main.js",
   "type": "module",
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "scripts": {
-    "start": "node main.js"
+    "start": "node main.js",
+    "dev": "node --watch main.js"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
+    "discord.js": "^14.15.3",
+    "mongoose": "^8.3.0",
+    "express": "^4.19.2",
     "dotenv": "^16.4.5",
-    "mongoose": "^8.2.1",
     "fluent-ffmpeg": "^2.1.2",
     "ffmpeg-static": "^5.2.0",
-    "yt-dlp-exec": "^1.0.1",
-    "uuid": "^9.0.1",
-    "express": "^4.18.2"
+    "yt-dlp-exec": "^2.3.0",
+    "uuid": "^9.0.1"
   }
 }
