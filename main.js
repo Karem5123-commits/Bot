@@ -1,223 +1,274 @@
 import 'dotenv/config';
 import {
-  Client, GatewayIntentBits, Partials,
-  REST, Routes, EmbedBuilder,
-  SlashCommandBuilder, ActivityType,
-  PermissionsBitField
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  REST,
+  Routes,
+  EmbedBuilder,
+  ActivityType,
+  SlashCommandBuilder
 } from "discord.js";
 
 import mongoose from "mongoose";
 import express from "express";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
+import ytdl from "yt-dlp-exec";
+import { v4 as uuidv4 } from "uuid";
+import fs from "fs/promises";
+import path from "path";
+import { User, GuildConfig } from "./models.js";
 
-import { User, Guild, Job } from "./models.js";
-import { getRank, calcElo, applyRank } from "./systems/ranking.js";
-import { processVideo } from "./systems/quality.js";
+// ===== SYSTEM SETUP =====
+ffmpeg.setFfmpegPath(ffmpegPath);
 
-// ============================
-// CLIENT
-// ============================
+const TEMP_DIR = path.join(process.cwd(), "temp");
+await fs.mkdir(TEMP_DIR, { recursive: true }).catch(() => {});
+
 const client = new Client({
-  intents: [3276799],
-  partials: [Partials.GuildMember]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
+  ],
+  partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// ============================
-// DATABASE
-// ============================
-await mongoose.connect(process.env.MONGO_URI);
-console.log("✅ Mongo Connected");
-
-// ============================
-// QUEUE SYSTEM
-// ============================
-let processing = false;
-
-async function runQueue() {
-  if (processing) return;
-  processing = true;
-
-  while (true) {
-    const job = await Job.findOne({ status: "pending" });
-    if (!job) break;
-
-    job.status = "processing";
-    await job.save();
-
-    try {
-      const output = await processVideo(job.url);
-      job.status = "done";
-      job.result = output;
-    } catch {
-      job.status = "failed";
-    }
-
-    await job.save();
-  }
-
-  processing = false;
+// ===== DATABASE (ONLY ONE) =====
+try {
+  await mongoose.connect(process.env.MONGO_URI_MAIN);
+  console.log("✅ MongoDB Connected");
+} catch (err) {
+  console.error("❌ MongoDB FAILED:", err.message);
+  process.exit(1);
 }
 
-// ============================
-// READY
-// ============================
+// ===== RANK SYSTEM =====
+const CONFIG = {
+  RANKS: [
+    { name: "Bronze", mmr: 0, color: "#8d6e63", icon: "🥉" },
+    { name: "Silver", mmr: 1200, color: "#b0bec5", icon: "🥈" },
+    { name: "Gold", mmr: 1800, color: "#f1c40f", icon: "🥇" },
+    { name: "Platinum", mmr: 2500, color: "#00bcd4", icon: "💎" },
+    { name: "Diamond", mmr: 3500, color: "#3498db", icon: "🛡️" },
+    { name: "Master", mmr: 4800, color: "#9b59b6", icon: "🔮" },
+    { name: "Legend", mmr: 6500, color: "#e74c3c", icon: "👑" }
+  ]
+};
+
+const getRank = (elo) =>
+  [...CONFIG.RANKS].reverse().find(r => elo >= r.mmr) || CONFIG.RANKS[0];
+
+const calcElo = (score, elo, streak) => {
+  let gain = (score - 5.5) * 50;
+  if (streak >= 3) gain *= 1.5;
+  if (elo > 3500) gain *= 0.7;
+  return Math.round(gain);
+};
+
+// ===== ROLE SYSTEM =====
+async function applyRank(member, elo) {
+  try {
+    let config =
+      await GuildConfig.findOne({ guildId: member.guild.id }) ||
+      await GuildConfig.create({ guildId: member.guild.id });
+
+    const rank = getRank(elo);
+
+    let roleId = config.rankRoles.get(rank.name);
+    let role = member.guild.roles.cache.get(roleId);
+
+    if (!role) {
+      role = await member.guild.roles.create({
+        name: rank.name,
+        color: rank.color
+      });
+      config.rankRoles.set(rank.name, role.id);
+      await config.save();
+    }
+
+    await member.roles.remove([...config.rankRoles.values()]).catch(() => {});
+    await member.roles.add(role);
+  } catch (err) {
+    console.error("Role error:", err.message);
+  }
+}
+
+// ===== READY =====
 client.once("ready", async () => {
   console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{
-      name: "made from https://discord.gg/g2Ff4vHfhM",
-      type: ActivityType.Playing
-    }]
+    activities: [{ name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }],
+    status: "online"
   });
+
+  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
   const commands = [
     new SlashCommandBuilder().setName("profile").setDescription("View stats"),
-
+    new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
     new SlashCommandBuilder()
       .setName("quality_method")
-      .setDescription("Ultra enhance")
-      .addAttachmentOption(o => o.setName("file").setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName("leaderboard")
-      .setDescription("Top players"),
-
-    new SlashCommandBuilder()
-      .setName("warn")
-      .setDescription("Warn user")
-      .addUserOption(o => o.setName("user").setRequired(true)),
-
-    new SlashCommandBuilder()
-      .setName("ban")
-      .setDescription("Ban user")
-      .addUserOption(o => o.setName("user").setRequired(true))
-
+      .setDescription("Enhance video")
+      .addStringOption(o => o.setName("url").setRequired(true))
   ].map(c => c.toJSON());
 
-  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-
   console.log("✅ Commands synced");
 });
 
-// ============================
-// INTERACTIONS
-// ============================
+// ===== INTERACTIONS =====
 client.on("interactionCreate", async i => {
   try {
-    if (!i.isChatInputCommand()) return;
+    if (i.isChatInputCommand()) {
 
-    // PROFILE
-    if (i.commandName === "profile") {
-      const user = await User.findOneAndUpdate(
-        { userId: i.user.id },
-        {},
-        { upsert: true, new: true }
+      // PROFILE
+      if (i.commandName === "profile") {
+        const user = await User.findOneAndUpdate(
+          { userId: i.user.id },
+          { username: i.user.username },
+          { upsert: true, new: true }
+        );
+
+        const rank = getRank(user.elo);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${rank.icon} ${i.user.username}`)
+          .setColor(rank.color)
+          .addFields(
+            { name: "ELO", value: `${user.elo}`, inline: true },
+            { name: "Rank", value: rank.name, inline: true },
+            { name: "Streak", value: `${user.streak}`, inline: true }
+          );
+
+        return i.reply({ embeds: [embed] });
+      }
+
+      // QUALITY METHOD (SAFE)
+      if (i.commandName === "quality_method") {
+        await i.deferReply();
+
+        try {
+          const url = i.options.getString("url");
+          const id = uuidv4();
+
+          const input = path.join(TEMP_DIR, `${id}.mp4`);
+          const output = path.join(TEMP_DIR, `out_${id}.mp4`);
+
+          await ytdl(url, { output: input });
+
+          await new Promise((res, rej) => {
+            ffmpeg(input)
+              .videoFilters(["scale=1920:-1"])
+              .save(output)
+              .on("end", res)
+              .on("error", rej);
+          });
+
+          await i.editReply({ files: [output] });
+
+          await fs.unlink(input).catch(() => {});
+          await fs.unlink(output).catch(() => {});
+        } catch {
+          await i.editReply("❌ Processing failed");
+        }
+      }
+
+      // SUBMIT
+      if (i.commandName === "submit") {
+        const modal = new ModalBuilder()
+          .setCustomId("submit")
+          .setTitle("Submit Clip");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("url")
+              .setLabel("Clip URL")
+              .setStyle(TextInputStyle.Short)
+          )
+        );
+
+        return i.showModal(modal);
+      }
+    }
+
+    // MODAL
+    if (i.isModalSubmit()) {
+      const url = i.fields.getTextInputValue("url");
+
+      const channel = await client.channels.fetch(process.env.REVIEW_CHANNEL_ID);
+
+      const row = new ActionRowBuilder().addComponents(
+        [4, 7, 10].map(score =>
+          new ButtonBuilder()
+            .setCustomId(`rank_${score}_${i.user.id}`)
+            .setLabel(`Score ${score}`)
+            .setStyle(ButtonStyle.Primary)
+        )
       );
 
-      const rank = getRank(user.elo);
+      await channel.send({
+        content: `Submission from <@${i.user.id}>\n${url}`,
+        components: [row]
+      });
 
-      return i.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(i.user.username)
-            .setColor(rank.color)
-            .addFields(
-              { name: "ELO", value: `${user.elo}`, inline: true },
-              { name: "Rank", value: rank.name, inline: true }
-            )
-        ]
+      return i.reply({ content: "✅ Submitted", ephemeral: true });
+    }
+
+    // BUTTONS
+    if (i.isButton()) {
+      const [_, score, userId] = i.customId.split("_");
+
+      const user =
+        await User.findOne({ userId }) ||
+        await User.create({ userId, elo: 1000 });
+
+      const gain = calcElo(Number(score), user.elo, user.streak);
+
+      user.elo += gain;
+      user.streak = Number(score) >= 8 ? user.streak + 1 : 0;
+
+      await user.save();
+
+      const member = await i.guild.members.fetch(userId).catch(() => null);
+      if (member) await applyRank(member, user.elo);
+
+      return i.update({
+        content: `✅ +${gain} ELO`,
+        components: []
       });
     }
 
-    // LEADERBOARD
-    if (i.commandName === "leaderboard") {
-      const top = await User.find().sort({ elo: -1 }).limit(10);
-
-      return i.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("🏆 Leaderboard")
-            .setDescription(
-              top.map((u, i) =>
-                `**${i + 1}.** <@${u.userId}> — ${u.elo}`
-              ).join("\n")
-            )
-        ]
-      });
-    }
-
-    // QUALITY METHOD (QUEUE)
-    if (i.commandName === "quality_method") {
-      await i.deferReply();
-
-      const file = i.options.getAttachment("file");
-
-      const job = await Job.create({
-        userId: i.user.id,
-        url: file.url,
-        status: "pending"
-      });
-
-      runQueue();
-
-      return i.editReply(`📥 Added to queue (ID: ${job._id})`);
-    }
-
-    // WARN
-    if (i.commandName === "warn") {
-      if (!i.member.permissions.has(PermissionsBitField.Flags.ModerateMembers))
-        return i.reply({ content: "No permission", ephemeral: true });
-
-      return i.reply("⚠️ User warned");
-    }
-
-    // BAN
-    if (i.commandName === "ban") {
-      if (!i.member.permissions.has(PermissionsBitField.Flags.BanMembers))
-        return i.reply({ content: "No permission", ephemeral: true });
-
-      const user = i.options.getUser("user");
-      await i.guild.members.ban(user.id);
-
-      return i.reply("🔨 Banned");
-    }
-
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error("Interaction error:", err);
   }
 });
 
-// ============================
-// ANTI RAID
-// ============================
-const joins = new Map();
+// ===== JOIN =====
+client.on("guildMemberAdd", async member => {
+  await User.findOneAndUpdate(
+    { userId: member.id },
+    { elo: 1000, username: member.user.username },
+    { upsert: true }
+  );
 
-client.on("guildMemberAdd", async m => {
-  const now = Date.now();
-  if (!joins.has(m.guild.id)) joins.set(m.guild.id, []);
-  const arr = joins.get(m.guild.id);
-
-  arr.push(now);
-  while (arr.length && now - arr[0] > 10000) arr.shift();
-
-  if (arr.length >= 5) {
-    const role = m.guild.roles.cache.find(r => r.name === "Quarantine")
-      || await m.guild.roles.create({ name: "Quarantine", color: 0xff0000 });
-
-    await m.roles.add(role);
-  }
-
-  await User.findOneAndUpdate({ userId: m.id }, {}, { upsert: true });
-  await applyRank(m, 1000);
+  await applyRank(member, 1000);
 });
 
-// ============================
-// WEB
-// ============================
+// ===== WEB (RAILWAY) =====
 const app = express();
-app.get("/", (_, res) => res.send("🔥 GOD BOT ONLINE"));
+app.get("/", (_, res) => res.send("Bot running"));
 app.listen(process.env.PORT || 3000);
 
-// ============================
+// ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
