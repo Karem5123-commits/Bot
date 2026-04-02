@@ -42,16 +42,14 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// ===== DATABASE FIX (FINAL) =====
-const mongoURI = process.env.MONGO_URI;
-
-if (!mongoURI) {
-  console.error("❌ MONGO_URI is missing!");
+// ===== DATABASE (FINAL FIX) =====
+if (!process.env.MONGO_URL) {
+  console.error("❌ MONGO_URL is missing in Railway variables");
   process.exit(1);
 }
 
 try {
-  await mongoose.connect(mongoURI);
+  await mongoose.connect(process.env.MONGO_URL);
   console.log("✅ MongoDB Connected");
 } catch (err) {
   console.error("❌ MongoDB FAILED:", err.message);
@@ -81,7 +79,7 @@ const calcElo = (score, elo, streak) => {
   return Math.round(gain);
 };
 
-// ===== ROLE SYSTEM FIXED =====
+// ===== ROLE SYSTEM (FIXED) =====
 async function applyRank(member, elo) {
   try {
     let config = await GuildConfig.findOne({ guildId: member.guild.id });
@@ -110,10 +108,8 @@ async function applyRank(member, elo) {
       await config.save();
     }
 
-    // remove old ranks safely
     const allRoles = Object.values(config.rankRoles);
     await member.roles.remove(allRoles).catch(() => {});
-
     await member.roles.add(role).catch(() => {});
   } catch (err) {
     console.error("Role error:", err.message);
@@ -121,29 +117,36 @@ async function applyRank(member, elo) {
 }
 
 // ===== READY =====
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [
-      { name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }
-    ],
+    activities: [{ name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }],
     status: "online"
   });
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
   const commands = [
-    new SlashCommandBuilder().setName("profile").setDescription("View stats"),
-    new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
+    new SlashCommandBuilder()
+      .setName("profile")
+      .setDescription("View stats"),
+
+    new SlashCommandBuilder()
+      .setName("submit")
+      .setDescription("Submit clip"),
+
     new SlashCommandBuilder()
       .setName("quality_method")
       .setDescription("Enhance video")
-      .addStringOption(o => o.setName("url").setRequired(true))
+      .addStringOption(o =>
+        o.setName("url")
+          .setDescription("Video URL") // ✅ CRASH FIX
+          .setRequired(true)
+      )
   ].map(c => c.toJSON());
 
   await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-
   console.log("✅ Commands synced");
 });
 
@@ -152,6 +155,7 @@ client.on("interactionCreate", async i => {
   try {
     if (i.isChatInputCommand()) {
 
+      // PROFILE
       if (i.commandName === "profile") {
         const user = await User.findOneAndUpdate(
           { userId: i.user.id },
@@ -173,6 +177,7 @@ client.on("interactionCreate", async i => {
         return i.reply({ embeds: [embed] });
       }
 
+      // QUALITY
       if (i.commandName === "quality_method") {
         await i.deferReply();
 
@@ -203,6 +208,7 @@ client.on("interactionCreate", async i => {
         }
       }
 
+      // SUBMIT
       if (i.commandName === "submit") {
         const modal = new ModalBuilder()
           .setCustomId("submit")
@@ -285,7 +291,7 @@ client.on("guildMemberAdd", async member => {
   await applyRank(member, 1000);
 });
 
-// ===== WEB (RAILWAY) =====
+// ===== WEB =====
 const app = express();
 app.get("/", (_, res) => res.send("Bot running"));
 app.listen(process.env.PORT || 3000);
