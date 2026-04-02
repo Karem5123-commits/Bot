@@ -3,6 +3,9 @@
   "version": "5.0.0",
   "main": "main.js",
   "type": "module",
+  "scripts": {
+    "start": "node main.js"
+  },
   "dependencies": {
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.5",
