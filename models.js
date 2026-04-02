@@ -5,11 +5,7 @@ const UserSchema = new mongoose.Schema({
   username: String,
   elo: { type: Number, default: 1000 },
   streak: { type: Number, default: 0 },
-  peakElo: { type: Number, default: 1000 },
-  stats: {
-    enhanced: { type: Number, default: 0 },
-    subs: { type: Number, default: 0 }
-  }
+  peakElo: { type: Number, default: 1000 }
 }, { timestamps: true });
 
 const GuildConfigSchema = new mongoose.Schema({
