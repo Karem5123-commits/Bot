@@ -42,7 +42,7 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// ===== DATABASE (FINAL FIX) =====
+// ===== DATABASE =====
 if (!process.env.MONGO_URL) {
   console.error("❌ MONGO_URL is missing in Railway variables");
   process.exit(1);
@@ -79,7 +79,7 @@ const calcElo = (score, elo, streak) => {
   return Math.round(gain);
 };
 
-// ===== ROLE SYSTEM (FIXED) =====
+// ===== ROLE SYSTEM =====
 async function applyRank(member, elo) {
   try {
     let config = await GuildConfig.findOne({ guildId: member.guild.id });
@@ -91,9 +91,9 @@ async function applyRank(member, elo) {
       });
     }
 
-    const rank = getRank(elo);
-
     if (!config.rankRoles) config.rankRoles = {};
+
+    const rank = getRank(elo);
 
     let roleId = config.rankRoles[rank.name];
     let role = member.guild.roles.cache.get(roleId);
@@ -121,7 +121,9 @@ client.once("clientReady", async () => {
   console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }],
+    activities: [
+      { name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }
+    ],
     status: "online"
   });
 
@@ -139,15 +141,20 @@ client.once("clientReady", async () => {
     new SlashCommandBuilder()
       .setName("quality_method")
       .setDescription("Enhance video")
-      .addStringOption(o =>
-        o.setName("url")
-          .setDescription("Video URL") // ✅ CRASH FIX
+      .addStringOption(option =>
+        option
+          .setName("url")
+          .setDescription("Video URL")
           .setRequired(true)
       )
-  ].map(c => c.toJSON());
+  ].map(cmd => cmd.toJSON());
 
-  await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-  console.log("✅ Commands synced");
+  await rest.put(
+    Routes.applicationGuildCommands(client.user.id, "1488203882130837704"),
+    { body: commands }
+  );
+
+  console.log("⚡ Commands synced instantly");
 });
 
 // ===== INTERACTIONS =====
@@ -155,7 +162,6 @@ client.on("interactionCreate", async i => {
   try {
     if (i.isChatInputCommand()) {
 
-      // PROFILE
       if (i.commandName === "profile") {
         const user = await User.findOneAndUpdate(
           { userId: i.user.id },
@@ -177,7 +183,6 @@ client.on("interactionCreate", async i => {
         return i.reply({ embeds: [embed] });
       }
 
-      // QUALITY
       if (i.commandName === "quality_method") {
         await i.deferReply();
 
@@ -208,7 +213,6 @@ client.on("interactionCreate", async i => {
         }
       }
 
-      // SUBMIT
       if (i.commandName === "submit") {
         const modal = new ModalBuilder()
           .setCustomId("submit")
@@ -228,7 +232,6 @@ client.on("interactionCreate", async i => {
       }
     }
 
-    // MODAL
     if (i.isModalSubmit()) {
       const url = i.fields.getTextInputValue("url");
 
@@ -251,7 +254,6 @@ client.on("interactionCreate", async i => {
       return i.reply({ content: "✅ Submitted", ephemeral: true });
     }
 
-    // BUTTONS
     if (i.isButton()) {
       const [_, score, userId] = i.customId.split("_");
 
