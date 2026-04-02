@@ -2,6 +2,13 @@ import 'dotenv/config';
 import {
   Client,
   GatewayIntentBits,
+  Partials,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   REST,
   Routes,
   EmbedBuilder,
@@ -11,58 +18,60 @@ import {
 
 import mongoose from "mongoose";
 import express from "express";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
+import ytdl from "yt-dlp-exec";
+import { v4 as uuidv4 } from "uuid";
+import fs from "fs/promises";
+import path from "path";
+import { User, GuildConfig } from "./models.js";
 
-// ===== CLIENT =====
+/* ================== GLOBAL ERROR PROTECTION ================== */
+process.on("unhandledRejection", err => console.error("❌ UNHANDLED:", err));
+process.on("uncaughtException", err => console.error("❌ CRASH:", err));
+
+/* ================== SYSTEM SETUP ================== */
+ffmpeg.setFfmpegPath(ffmpegPath);
+
+const TEMP_DIR = path.join(process.cwd(), "temp");
+await fs.mkdir(TEMP_DIR, { recursive: true }).catch(() => {});
+
+/* ================== CLIENT ================== */
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
-// ===== DATABASE =====
-await mongoose.connect(process.env.MONGO_URL);
-console.log("✅ MongoDB Connected");
+/* ================== DATABASE ================== */
+if (!process.env.MONGO_URL) {
+  console.error("❌ MONGO_URL missing");
+  process.exit(1);
+}
 
-// ===== USER MODEL =====
-const userSchema = new mongoose.Schema({
-  userId: String,
-  username: String,
-  elo: { type: Number, default: 1000 },
-  streak: { type: Number, default: 0 },
-  coins: { type: Number, default: 1000 }
-});
-const User = mongoose.model("User", userSchema);
+await mongoose.connect(process.env.MONGO_URL)
+  .then(() => console.log("✅ MongoDB Connected"))
+  .catch(err => {
+    console.error("❌ MongoDB FAIL:", err.message);
+    process.exit(1);
+  });
 
-// ===== GUILD CONFIG =====
-const guildSchema = new mongoose.Schema({
-  guildId: String,
-  commands: Object,
-  rankRoles: Object
-});
-const Guild = mongoose.model("Guild", guildSchema);
-
-// ===== COMMAND STATE =====
-let COMMANDS = {
-  profile: true,
-  submit: true,
-  quality_method: true,
-  leaderboard: true,
-  coinflip: true,
-  daily: true,
-  balance: true
+/* ================== RANK SYSTEM ================== */
+const CONFIG = {
+  RANKS: [
+    { name: "Bronze", mmr: 0, color: "#8d6e63", icon: "🥉" },
+    { name: "Silver", mmr: 1200, color: "#b0bec5", icon: "🥈" },
+    { name: "Gold", mmr: 1800, color: "#f1c40f", icon: "🥇" },
+    { name: "Platinum", mmr: 2500, color: "#00bcd4", icon: "💎" },
+    { name: "Diamond", mmr: 3500, color: "#3498db", icon: "🛡️" },
+    { name: "Master", mmr: 4800, color: "#9b59b6", icon: "🔮" },
+    { name: "Legend", mmr: 6500, color: "#e74c3c", icon: "👑" }
+  ]
 };
 
-// ===== RANK SYSTEM =====
-const RANKS = [
-  { name: "Bronze", mmr: 0 },
-  { name: "Silver", mmr: 1200 },
-  { name: "Gold", mmr: 1800 },
-  { name: "Platinum", mmr: 2500 },
-  { name: "Diamond", mmr: 3500 },
-  { name: "Master", mmr: 4800 },
-  { name: "Legend", mmr: 6500 }
-];
-
-const getRank = elo =>
-  [...RANKS].reverse().find(r => elo >= r.mmr) || RANKS[0];
+const getRank = (elo) =>
+  [...CONFIG.RANKS].reverse().find(r => elo >= r.mmr) || CONFIG.RANKS[0];
 
 const calcElo = (score, elo, streak) => {
   let gain = (score - 5.5) * 50;
@@ -71,206 +80,177 @@ const calcElo = (score, elo, streak) => {
   return Math.round(gain);
 };
 
-// ===== ROLE SYSTEM =====
+/* ================== ROLE SYSTEM ================== */
 async function applyRank(member, elo) {
-  let config = await Guild.findOne({ guildId: member.guild.id }) ||
-               await Guild.create({ guildId: member.guild.id, rankRoles: {} });
+  try {
+    let config = await GuildConfig.findOne({ guildId: member.guild.id });
 
-  const rank = getRank(elo);
+    if (!config) {
+      config = await GuildConfig.create({ guildId: member.guild.id, rankRoles: {} });
+    }
 
-  let roleId = config.rankRoles?.[rank.name];
-  let role = member.guild.roles.cache.get(roleId);
+    const rank = getRank(elo);
 
-  if (!role) {
-    role = await member.guild.roles.create({ name: rank.name });
-    config.rankRoles[rank.name] = role.id;
-    await config.save();
+    let roleId = config.rankRoles?.[rank.name];
+    let role = member.guild.roles.cache.get(roleId);
+
+    if (!role) {
+      role = await member.guild.roles.create({
+        name: rank.name,
+        color: rank.color
+      });
+
+      config.rankRoles[rank.name] = role.id;
+      await config.save();
+    }
+
+    await member.roles.remove(Object.values(config.rankRoles)).catch(() => {});
+    await member.roles.add(role).catch(() => {});
+  } catch (err) {
+    console.error("Role error:", err.message);
   }
-
-  await member.roles.remove(Object.values(config.rankRoles)).catch(()=>{});
-  await member.roles.add(role).catch(()=>{});
 }
 
-// ===== EXPRESS =====
-const app = express();
-app.use(express.json());
+/* ================== COMMAND BUILDER (SAFE) ================== */
+const commands = [
+  new SlashCommandBuilder()
+    .setName("profile")
+    .setDescription("View your stats"),
 
-// ===== API =====
-app.get("/api/users", async (req, res) => {
-  const users = await User.find().sort({ elo: -1 }).limit(50);
-  res.json(users);
-});
+  new SlashCommandBuilder()
+    .setName("submit")
+    .setDescription("Submit score")
+    .addIntegerOption(o =>
+      o
+        .setName("score")
+        .setDescription("Score from 1-10") // ✅ FIXED
+        .setRequired(true)
+    ),
 
-app.get("/api/commands", (req, res) => res.json(COMMANDS));
+  new SlashCommandBuilder()
+    .setName("quality_method")
+    .setDescription("Enhance video")
+    .addStringOption(o =>
+      o
+        .setName("url")
+        .setDescription("Video URL") // ✅ FIXED
+        .setRequired(true)
+    )
+].map(c => c.toJSON());
 
-app.post("/api/commands/:cmd", (req, res) => {
-  const cmd = req.params.cmd;
-  if (COMMANDS[cmd] !== undefined) {
-    COMMANDS[cmd] = !COMMANDS[cmd];
-  }
-  res.json(COMMANDS);
-});
-
-// ===== DASHBOARD =====
-app.get("/dashboard", (req, res) => {
-  res.send(`
-  <html>
-  <body style="background:#0f172a;color:white;font-family:sans-serif;">
-  <h1>Omega Dashboard</h1>
-
-  <h2>Commands</h2>
-  <div id="cmds"></div>
-
-  <h2>Leaderboard</h2>
-  <div id="lb"></div>
-
-  <script>
-    async function load(){
-      let c = await fetch('/api/commands').then(r=>r.json());
-      let u = await fetch('/api/users').then(r=>r.json());
-
-      let cmdDiv = document.getElementById('cmds');
-      cmdDiv.innerHTML = '';
-
-      for(let k in c){
-        let b = document.createElement('button');
-        b.innerText = k + ": " + (c[k] ? "ON" : "OFF");
-        b.onclick = async ()=>{
-          await fetch('/api/commands/'+k,{method:'POST'});
-          load();
-        };
-        cmdDiv.appendChild(b);
-      }
-
-      let lbDiv = document.getElementById('lb');
-      lbDiv.innerHTML = '';
-      u.forEach((x,i)=>{
-        let d = document.createElement('div');
-        d.innerText = "#" + (i+1) + " " + x.username + " - " + x.elo;
-        lbDiv.appendChild(d);
-      });
-    }
-    load();
-  </script>
-  </body>
-  </html>
-  `);
-});
-
-app.get("/", (_, res) => res.send("Bot running"));
-app.listen(process.env.PORT || 3000);
-
-// ===== READY =====
-client.once("ready", async () => {
-  console.log(`🔥 ${client.user.tag}`);
+/* ================== READY ================== */
+client.once("clientReady", async () => {
+  console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: "Omega System", type: ActivityType.Playing }]
+    activities: [{ name: "Elite Bot Active", type: ActivityType.Playing }]
   });
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-  const commands = [
-    new SlashCommandBuilder().setName("profile").setDescription("Profile"),
-    new SlashCommandBuilder().setName("leaderboard").setDescription("Top players"),
-    new SlashCommandBuilder().setName("submit").setDescription("Submit score")
-      .addIntegerOption(o=>o.setName("score").setRequired(true)),
-    new SlashCommandBuilder().setName("quality_method").setDescription("Video"),
-    new SlashCommandBuilder().setName("coinflip").setDescription("Gamble"),
-    new SlashCommandBuilder().setName("daily").setDescription("Daily coins"),
-    new SlashCommandBuilder().setName("balance").setDescription("Your money")
-  ].map(c=>c.toJSON());
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(client.user.id, "1488203882130837704"),
+      { body: commands }
+    );
 
-  await rest.put(
-    Routes.applicationGuildCommands(client.user.id, "1488203882130837704"),
-    { body: commands }
-  );
-
-  console.log("✅ Commands synced");
+    console.log("⚡ Commands synced instantly");
+  } catch (err) {
+    console.error("❌ Command sync failed:", err);
+  }
 });
 
-// ===== COMMAND HANDLER =====
+/* ================== INTERACTIONS ================== */
 client.on("interactionCreate", async i => {
-  if (!i.isChatInputCommand()) return;
+  try {
+    if (!i.isChatInputCommand()) return;
 
-  if (!COMMANDS[i.commandName]) {
-    return i.reply({ content: "❌ Disabled", ephemeral: true });
-  }
+    if (i.commandName === "profile") {
+      const user = await User.findOneAndUpdate(
+        { userId: i.user.id },
+        { username: i.user.username, elo: 1000, streak: 0 },
+        { upsert: true, new: true }
+      );
 
-  let user = await User.findOneAndUpdate(
-    { userId: i.user.id },
-    { username: i.user.username },
-    { upsert: true, new: true }
-  );
+      const rank = getRank(user.elo);
 
-  // PROFILE
-  if (i.commandName === "profile") {
-    const rank = getRank(user.elo);
-    return i.reply({
-      embeds: [new EmbedBuilder()
-        .setTitle(i.user.username)
-        .addFields(
-          { name:"ELO", value:`${user.elo}`, inline:true },
-          { name:"Rank", value:rank.name, inline:true },
-          { name:"Coins", value:`${user.coins}`, inline:true }
-        )]
-    });
-  }
+      return i.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`${rank.icon} ${i.user.username}`)
+            .setColor(rank.color)
+            .addFields(
+              { name: "ELO", value: `${user.elo}`, inline: true },
+              { name: "Rank", value: rank.name, inline: true }
+            )
+        ]
+      });
+    }
 
-  // SUBMIT
-  if (i.commandName === "submit") {
-    const score = i.options.getInteger("score");
-    const gain = calcElo(score, user.elo, user.streak);
+    if (i.commandName === "quality_method") {
+      await i.deferReply();
 
-    user.elo += gain;
-    user.streak = score >= 8 ? user.streak + 1 : 0;
-    await user.save();
+      try {
+        const url = i.options.getString("url");
+        const id = uuidv4();
 
-    const member = await i.guild.members.fetch(i.user.id);
-    await applyRank(member, user.elo);
+        const input = path.join(TEMP_DIR, `${id}.mp4`);
+        const output = path.join(TEMP_DIR, `out_${id}.mp4`);
 
-    return i.reply(`🏆 +${gain} ELO`);
-  }
+        await ytdl(url, { output: input });
 
-  // LEADERBOARD
-  if (i.commandName === "leaderboard") {
-    const top = await User.find().sort({ elo:-1 }).limit(10);
-    return i.reply(top.map((u,i)=>`#${i+1} ${u.username} - ${u.elo}`).join("\\n"));
-  }
+        await new Promise((res, rej) => {
+          ffmpeg(input)
+            .videoFilters(["scale=1920:-1"])
+            .save(output)
+            .on("end", res)
+            .on("error", rej);
+        });
 
-  // ECONOMY
-  if (i.commandName === "daily") {
-    user.coins += 500;
-    await user.save();
-    return i.reply("💰 +500 coins");
-  }
+        await i.editReply({ files: [output] });
 
-  if (i.commandName === "balance") {
-    return i.reply(`💰 ${user.coins}`);
-  }
+        await fs.unlink(input).catch(() => {});
+        await fs.unlink(output).catch(() => {});
+      } catch {
+        await i.editReply("❌ Processing failed");
+      }
+    }
 
-  if (i.commandName === "coinflip") {
-    const win = Math.random()>0.5;
-    user.coins += win ? 200 : -200;
-    await user.save();
-    return i.reply(win ? "🪙 Win!" : "❌ Lose!");
-  }
+    if (i.commandName === "submit") {
+      const score = i.options.getInteger("score");
 
-  // QUALITY (basic safe version)
-  if (i.commandName === "quality_method") {
-    return i.reply("🎥 Quality system ready");
+      const user =
+        await User.findOne({ userId: i.user.id }) ||
+        await User.create({ userId: i.user.id, elo: 1000, streak: 0 });
+
+      const gain = calcElo(score, user.elo, user.streak);
+
+      user.elo += gain;
+      await user.save();
+
+      return i.reply(`✅ +${gain} ELO`);
+    }
+
+  } catch (err) {
+    console.error("Interaction error:", err);
   }
 });
 
-// ===== JOIN =====
-client.on("guildMemberAdd", async m => {
-  let user = await User.findOneAndUpdate(
-    { userId: m.id },
-    { username: m.user.username },
-    { upsert:true, new:true }
-  );
-  await applyRank(m, user.elo);
+/* ================== WEB ================== */
+const app = express();
+
+app.get("/", (_, res) => res.send("Bot running"));
+
+app.get("/dashboard", async (_, res) => {
+  const users = await User.find().sort({ elo: -1 }).limit(10);
+
+  res.send(`
+    <h1>🏆 Leaderboard</h1>
+    ${users.map(u => `<p>${u.username} - ${u.elo}</p>`).join("")}
+  `);
 });
 
-// ===== LOGIN =====
+app.listen(process.env.PORT || 3000);
+
+/* ================== LOGIN ================== */
 client.login(process.env.DISCORD_TOKEN);
