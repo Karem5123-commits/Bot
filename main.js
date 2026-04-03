@@ -1,7 +1,8 @@
 import {
-  Client, GatewayIntentBits, EmbedBuilder, ModalBuilder,
-  TextInputBuilder, TextInputStyle, ActionRowBuilder,
-  ButtonBuilder, ButtonStyle, PermissionsBitField
+  Client, SlashCommandBuilder, REST, Routes,
+  EmbedBuilder, ModalBuilder, TextInputBuilder,
+  TextInputStyle, ActionRowBuilder, ButtonBuilder,
+  ButtonStyle, PermissionsBitField
 } from 'discord.js';
 
 import mongoose from 'mongoose';
@@ -11,7 +12,7 @@ import crypto from 'crypto';
 
 dotenv.config();
 
-// ================= SAFE =================
+// ================= SAFE START =================
 process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
@@ -19,67 +20,18 @@ process.on('unhandledRejection', console.error);
 const app = express();
 app.use(express.json());
 
-// Dashboard UI
-app.get("/", (req, res) => {
-  res.send(`
-    <html>
-    <head>
-      <title>Bot Dashboard</title>
-      <style>
-        body { background:#0f172a; color:white; text-align:center; font-family:sans-serif; }
-        button { padding:12px; margin:10px; border:none; border-radius:8px; cursor:pointer; }
-      </style>
-    </head>
-    <body>
-      <h1>🔥 Bot Dashboard</h1>
-      <button onclick="toggle('ranking')">Toggle Ranking</button>
-      <button onclick="toggle('moderation')">Toggle Moderation</button>
-
-      <script>
-        async function toggle(type){
-          await fetch('/toggle',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({guildId:'${process.env.GUILD_ID}', type})
-          });
-          alert(type + ' toggled');
-        }
-      </script>
-    </body>
-    </html>
-  `);
-});
-
-// Toggle route
-const Config = mongoose.model("Config", new mongoose.Schema({
-  guildId: String,
-  rankingEnabled: { type: Boolean, default: true },
-  moderationEnabled: { type: Boolean, default: true }
-}));
-
-app.post("/toggle", async (req, res) => {
-  const { guildId, type } = req.body;
-
-  let config = await Config.findOne({ guildId });
-  if (!config) config = await Config.create({ guildId });
-
-  if (type === "ranking") config.rankingEnabled = !config.rankingEnabled;
-  if (type === "moderation") config.moderationEnabled = !config.moderationEnabled;
-
-  await config.save();
-  res.json({ success: true });
-});
+app.get('/', (_, res) => res.send('🔥 Bot Running'));
 
 // ================= DATABASE =================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo Connected"))
-  .catch(console.error);
+  .catch(err => console.error(err));
 
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
   mmr: { type: Number, default: 1000 },
-  rank: { type: String, default: "Gold" },
+  rank: { type: String, default: "Bronze" },
   submissions: { type: Number, default: 0 },
   accepted: { type: Number, default: 0 },
   rejected: { type: Number, default: 0 }
@@ -116,173 +68,216 @@ function getRank(mmr) {
 function generateScore() {
   return Math.floor(Math.random() * 10) + 1;
 }
-
 function calculateMMRChange(score) {
   return (score - 5) * 20;
 }
 
 // ================= DISCORD =================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
-});
+const client = new Client({ intents: 32767 });
 
-client.once("ready", () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+client.once("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+
+  const cmds = [
+    new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
+    new SlashCommandBuilder().setName("profile").setDescription("View profile"),
+    new SlashCommandBuilder().setName("review").setDescription("Review clips (staff)")
+  ].map(c => c.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: cmds }
+  );
 });
 
 // ================= COMMANDS =================
-client.on("messageCreate", async msg => {
-  if (msg.author.bot) return;
+client.on("interactionCreate", async i => {
+  try {
 
-  let config = await Config.findOne({ guildId: msg.guild.id });
-  if (!config) config = await Config.create({ guildId: msg.guild.id });
+    if (i.isChatInputCommand()) {
 
-  // ===== PREFIX MODERATION (!) =====
-  if (msg.content.startsWith("!")) {
-    if (!config.moderationEnabled) return;
+      if (i.commandName === "submit") {
+        const modal = new ModalBuilder()
+          .setCustomId("submit_modal")
+          .setTitle("Submit Clip");
 
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) return;
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("link")
+              .setLabel("Video URL")
+              .setStyle(TextInputStyle.Short)
+          )
+        );
 
-    const args = msg.content.split(" ");
-    const cmd = args[0].toLowerCase();
+        return i.showModal(modal);
+      }
 
-    if (cmd === "!kick") {
-      const user = msg.mentions.members.first();
-      if (user) user.kick();
+      if (i.commandName === "profile") {
+        let user = await User.findOne({ userId: i.user.id });
+        if (!user) user = await User.create({ userId: i.user.id, username: i.user.tag });
+
+        return i.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`${i.user.username}`)
+              .addFields(
+                { name: "MMR", value: `${user.mmr}`, inline: true },
+                { name: "Rank", value: `${getRank(user.mmr)}`, inline: true }
+              )
+          ]
+        });
+      }
+
+      if (i.commandName === "review") {
+        if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+          return i.reply({ content: "Staff only", ephemeral: true });
+        }
+
+        const sub = await Submission.findOne({ status: "pending" });
+        if (!sub) return i.reply("No submissions.");
+
+        const score = generateScore();
+        const mmrChange = calculateMMRChange(score);
+
+        const user = await User.findOne({ userId: sub.userId });
+        const newMMR = (user?.mmr || 1000) + mmrChange;
+        const suggestedRank = getRank(newMMR);
+
+        sub.aiScore = score;
+        sub.suggestedMMR = mmrChange;
+        sub.suggestedRank = suggestedRank;
+        await sub.save();
+
+        const embed = new EmbedBuilder()
+          .setTitle("🎯 AI Judgment")
+          .setDescription(sub.link)
+          .addFields(
+            { name: "Score", value: `${score}/10`, inline: true },
+            { name: "MMR Change", value: `${mmrChange}`, inline: true },
+            { name: "Suggested Rank", value: `${suggestedRank}`, inline: true }
+          );
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`accept_${sub.id}`).setLabel("Accept").setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`reject_${sub.id}`).setLabel("Reject").setStyle(ButtonStyle.Danger)
+        );
+
+        return i.reply({ embeds: [embed], components: [row] });
+      }
     }
 
-    if (cmd === "!ban") {
-      const user = msg.mentions.members.first();
-      if (user) user.ban();
-    }
-
-    if (cmd === "!clear") {
-      msg.channel.bulkDelete(args[1] || 10);
-    }
-  }
-
-  // ===== PREFIX RANKING (?) =====
-  if (msg.content.startsWith("?")) {
-    if (!config.rankingEnabled) return;
-
-    const args = msg.content.split(" ");
-    const cmd = args[0].toLowerCase();
-
-    if (cmd === "?profile") {
-      let user = await User.findOne({ userId: msg.author.id });
-      if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
-
-      return msg.reply(`MMR: ${user.mmr} | Rank: ${user.rank}`);
-    }
-
-    if (cmd === "?leaderboard") {
-      const top = await User.find().sort({ mmr: -1 }).limit(10);
-
-      const text = top.map((u, i) => `#${i + 1} <@${u.userId}> - ${u.mmr}`).join("\n");
-
-      return msg.reply(`🏆 Leaderboard:\n${text}`);
-    }
-
-    if (cmd === "?submit") {
-      const link = args[1];
-      if (!link) return msg.reply("Provide link");
-
+    if (i.isModalSubmit()) {
+      const link = i.fields.getTextInputValue("link");
       const id = crypto.randomBytes(4).toString("hex");
 
-      await Submission.create({
-        id,
-        userId: msg.author.id,
-        link
-      });
+      await Submission.create({ id, userId: i.user.id, link });
 
       await User.updateOne(
-        { userId: msg.author.id },
-        { $inc: { submissions: 1 } },
+        { userId: i.user.id },
+        { $inc: { submissions: 1 }, username: i.user.tag },
         { upsert: true }
       );
 
-      return msg.reply("✅ Submitted");
+      return i.reply({ content: "✅ Submitted", ephemeral: true });
     }
 
-    if (cmd === "?review") {
-      if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
+    if (i.isButton()) {
+      const [action, id] = i.customId.split("_");
+      const sub = await Submission.findOne({ id });
+      if (!sub) return;
 
-      const sub = await Submission.findOne({ status: "pending" });
-      if (!sub) return msg.reply("No submissions");
-
-      const score = generateScore();
-      const mmr = calculateMMRChange(score);
       const user = await User.findOne({ userId: sub.userId });
+      const newMMR = (user?.mmr || 1000) + sub.suggestedMMR;
 
-      const newMMR = (user?.mmr || 1000) + mmr;
-      const rank = getRank(newMMR);
-
-      sub.aiScore = score;
-      sub.suggestedMMR = mmr;
-      sub.suggestedRank = rank;
-      await sub.save();
-
-      const embed = new EmbedBuilder()
-        .setTitle("🎯 Judgment")
-        .setDescription(sub.link)
-        .addFields(
-          { name: "Score", value: `${score}`, inline: true },
-          { name: "MMR", value: `${mmr}`, inline: true },
-          { name: "Rank", value: rank, inline: true }
+      if (action === "accept") {
+        await User.updateOne(
+          { userId: sub.userId },
+          {
+            mmr: newMMR,
+            rank: getRank(newMMR),
+            $inc: { accepted: 1 }
+          }
         );
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`accept_${sub.id}`).setLabel("Accept").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`reject_${sub.id}`).setLabel("Reject").setStyle(ButtonStyle.Danger)
-      );
+        sub.status = "accepted";
+        await sub.save();
 
-      return msg.reply({ embeds: [embed], components: [row] });
+        return i.update({ content: "✅ Accepted & applied", components: [] });
+      }
+
+      if (action === "reject") {
+        await User.updateOne(
+          { userId: sub.userId },
+          { $inc: { rejected: 1 } }
+        );
+
+        sub.status = "rejected";
+        await sub.save();
+
+        return i.update({ content: "❌ Rejected", components: [] });
+      }
     }
+
+  } catch (e) {
+    console.error(e);
   }
 });
 
-// ================= BUTTONS =================
-client.on("interactionCreate", async i => {
-  if (!i.isButton()) return;
+// ================= API ROUTES =================
 
-  const [action, id] = i.customId.split("_");
-  const sub = await Submission.findOne({ id });
+// STATUS
+app.get('/api/status', (req, res) => {
+  res.json({
+    online: client.isReady(),
+    tag: client.user ? client.user.tag : null
+  });
+});
 
-  if (!sub) return;
+// LEADERBOARD
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const users = await User.find().sort({ mmr: -1 }).limit(50);
 
-  if (action === "accept") {
-    const user = await User.findOne({ userId: sub.userId });
-
-    const newMMR = (user?.mmr || 1000) + sub.suggestedMMR;
-    const rank = getRank(newMMR);
-
-    await User.updateOne(
-      { userId: sub.userId },
-      {
-        $inc: { mmr: sub.suggestedMMR, accepted: 1 },
-        $set: { rank }
-      }
-    );
-
-    return i.update({ content: "✅ Accepted", components: [] });
+    res.json(users.map((u, i) => ({
+      position: i + 1,
+      username: u.username || "Unknown",
+      mmr: u.mmr,
+      rank: getRank(u.mmr)
+    })));
+  } catch (e) {
+    res.status(500).json({ error: "Failed" });
   }
+});
 
-  if (action === "reject") {
-    await User.updateOne(
-      { userId: sub.userId },
-      { $inc: { rejected: 1 } }
-    );
+// USER
+app.get('/api/user/:id', async (req, res) => {
+  const user = await User.findOne({ userId: req.params.id });
+  if (!user) return res.status(404).json({ error: "Not found" });
 
-    return i.update({ content: "❌ Rejected", components: [] });
-  }
+  res.json({
+    ...user.toObject(),
+    rank: getRank(user.mmr)
+  });
+});
+
+// SUBMISSIONS
+app.get('/api/submissions', async (req, res) => {
+  const subs = await Submission.find({ status: "pending" });
+  res.json(subs);
 });
 
 // ================= START =================
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => console.log("✅ Bot Online"))
-  .catch(console.error);
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Dashboard running on ${PORT}`);
+
+app.listen(PORT, () => {
+  console.log(`🌐 Dashboard running on port ${PORT}`);
 });
+
+console.log("🚀 Starting bot...");
+
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log("✅ Discord login successful"))
+  .catch(err => console.error(err));
