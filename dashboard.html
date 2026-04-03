@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ultra AI Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: white;
+}
+
+header {
+  padding: 20px;
+  background: #020617;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+h1 { margin: 0; }
+
+nav button {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  margin-left: 20px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+nav button:hover {
+  color: white;
+}
+
+.container {
+  padding: 20px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+  gap: 15px;
+}
+
+.card {
+  background: #1e293b;
+  padding: 20px;
+  border-radius: 12px;
+  transition: 0.2s;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  background: #334155;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.card p {
+  font-size: 26px;
+  margin: 8px 0 0;
+}
+
+.hidden { display: none; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+}
+
+th, td {
+  padding: 12px;
+  border-bottom: 1px solid #334155;
+}
+
+tr:hover {
+  background: #1e293b;
+}
+
+.status {
+  color: #22c55e;
+  font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>🔥 Ultra AI Dashboard</h1>
+  <nav>
+    <button onclick="showPage('dashboard')">Dashboard</button>
+    <button onclick="showPage('leaderboard')">Leaderboard</button>
+  </nav>
+</header>
+
+<div class="container">
+
+<div id="dashboard">
+  <div class="cards">
+    <div class="card"><h2>Total Users</h2><p id="users">0</p></div>
+    <div class="card"><h2>Submissions</h2><p id="subs">0</p></div>
+    <div class="card"><h2>Processed</h2><p id="processed">0</p></div>
+    <div class="card"><h2>Errors</h2><p id="errors">0</p></div>
+    <div class="card"><h2>Queue</h2><p id="queue">0</p></div>
+    <div class="card"><h2>Status</h2><p class="status">ONLINE</p></div>
+  </div>
+</div>
+
+<div id="leaderboard" class="hidden">
+  <h2>🏆 Top Players</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>User</th>
+        <th>MMR</th>
+        <th>Rank</th>
+        <th>Submissions</th>
+      </tr>
+    </thead>
+    <tbody id="leaderboardBody"></tbody>
+  </table>
+</div>
+
+</div>
+
+<script>
+
+const API_BASE = "https://bot-production-d4a9.up.railway.app";
+
+function showPage(page) {
+  document.getElementById("dashboard").classList.add("hidden");
+  document.getElementById("leaderboard").classList.add("hidden");
+  document.getElementById(page).classList.remove("hidden");
+}
+
+async function loadDashboard() {
+  try {
+    const res = await fetch(API_BASE + "/api/dashboard");
+    const data = await res.json();
+
+    document.getElementById("users").innerText = data.users || 0;
+    document.getElementById("subs").innerText = data.submissions || 0;
+    document.getElementById("processed").innerText = data.stats.totalProcessed || 0;
+    document.getElementById("errors").innerText = data.stats.totalErrors || 0;
+    document.getElementById("queue").innerText = data.queue.current + "/" + data.queue.max;
+
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function loadLeaderboard() {
+  try {
+    const res = await fetch(API_BASE + "/api/leaderboard");
+    const data = await res.json();
+
+    const body = document.getElementById("leaderboardBody");
+    body.innerHTML = "";
+
+    data.slice(0, 20).forEach(user => {
+      const row = document.createElement("tr");
+
+      row.innerHTML = `
+        <td>${user.position}</td>
+        <td>${user.username}</td>
+        <td>${user.mmr}</td>
+        <td>${user.rank}</td>
+        <td>${user.submissions}</td>
+      `;
+
+      body.appendChild(row);
+    });
+
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+loadDashboard();
+loadLeaderboard();
+
+setInterval(() => {
+  loadDashboard();
+  loadLeaderboard();
+}, 10000);
+
+</script>
+
+</body>
+</html>
