@@ -1,64 +1,77 @@
-// Updated production-ready backend for the bot
+// Import necessary modules
+import express from 'express';
+import { Client, GatewayIntentBits } from 'discord.js';
+import axios from 'axios';
+import fs from 'fs';
+import winston from 'winston';
 
-const express = require('express');
-const { Queue } = require('bull');  // Importing Bull for queue management
-const { createLogger, transports } = require('winston');  // Importing Winston for logging
+// Initialize the Express app
 const app = express();
 
-// Setting up logging
-const logger = createLogger({
-  level: 'info',
-  format: winston.format.json(),
-  transports: [
-    new transports.File({ filename: 'error.log', level: 'error' }),
-    new transports.File({ filename: 'combined.log' })
-  ]
+// Initialize the Discord bot
+const discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+
+// Logging configuration
+const logger = winston.createLogger({
+    level: 'info',
+    format: winston.format.json(),
+    transports: [
+        new winston.transports.File({ filename: 'error.log', level: 'error' }),
+        new winston.transports.Console(),
+    ],
 });
 
-// Queue management for video processing
-const videoQueue = new Queue('videoProcessing');
+// Video queue management
+class VideoQueue {
+    constructor() {
+        this.queue = [];
+    }
 
-// Middleware for error handling
-app.use((err, req, res, next) => {
-  logger.error(err.stack);
-  res.status(500).send('Something broke!');
+    addVideo(video) {
+        this.queue.push(video);
+        logger.info(`Video added: ${video}`);
+    }
+
+    processQueue() {
+        while(this.queue.length > 0) {
+            const video = this.queue.shift();
+            // Logic for processing the video
+            logger.info(`Processing video: ${video}`);
+        }
+    }
+}
+
+const videoQueue = new VideoQueue();
+
+// AudD API integration
+async function fetchAudioInfo(audioFile) {
+    try {
+        const response = await axios.post('https://api.audd.io/', {
+            api_token: 'YOUR_AUDD_API_TOKEN',
+            file: fs.createReadStream(audioFile),
+        });
+        return response.data;
+    } catch (error) {
+        logger.error('AudD API error: ', error);
+    }
+}
+
+// Discord Bot Commands
+discordClient.on('messageCreate', async (message) => {
+    if (message.content === '!queue') {
+        // Example command handling
+        message.channel.send('Current video queue: ' + videoQueue.queue.join(', '));
+    }
 });
 
-// Endpoint for status
-app.get('/status', (req, res) => {
-  res.send('Bot is running!');
+// Start the Discord bot
+discordClient.login('YOUR_DISCORD_BOT_TOKEN');
+
+// Failsafe processing and error handling
+process.on('uncaughtException', (err) => {
+    logger.error('Uncaught Exception: ', err);
 });
 
-// Video processing endpoint
-app.post('/process-video', (req, res) => {
-  // Add video processing job to the queue
-  videoQueue.add({ videoUrl: req.body.videoUrl });
-  res.send('Video processing started');
-});
-
-// Process video jobs
-videoQueue.process((job, done) => {
-  // Video processing logic here
-  const videoUrl = job.data.videoUrl;
-  // Assume we have a function processVideo that handles the processing
-  processVideo(videoUrl)
-    .then(() => {
-      logger.info(`Processing completed for video: ${videoUrl}`);
-      done();
-    })
-    .catch((error) => {
-      logger.error(`Error processing video ${videoUrl}: ${error.message}`);
-      done(new Error('Processing failed'));  // Mark job as failed
-    });
-});
-
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
-
-// Memory cleanup logic if needed
-process.on('exit', (code) => {
-  logger.info(`Process exited with code: ${code}`);
+app.listen(3000, () => {
+    logger.info('Server is running on port 3000');
 });
