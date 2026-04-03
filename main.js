@@ -1,77 +1,54 @@
-// Import necessary modules
-import express from 'express';
-import { Client, GatewayIntentBits } from 'discord.js';
-import axios from 'axios';
-import fs from 'fs';
+import { Client, Intents } from 'discord.js';
 import winston from 'winston';
+import AudD from 'audD';
 
-// Initialize the Express app
-const app = express();
-
-// Initialize the Discord bot
-const discordClient = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
-
-// Logging configuration
+const client = new Client({ intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES] });
 const logger = winston.createLogger({
-    level: 'info',
-    format: winston.format.json(),
-    transports: [
-        new winston.transports.File({ filename: 'error.log', level: 'error' }),
-        new winston.transports.Console(),
-    ],
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'combined.log' })
+  ]
 });
 
-// Video queue management
-class VideoQueue {
-    constructor() {
-        this.queue = [];
-    }
+const MAX_VIDEO_QUEUE = 3;
+const videoQueue = [];
 
-    addVideo(video) {
-        this.queue.push(video);
-        logger.info(`Video added: ${video}`);
-    }
+client.on('ready', () => {
+  logger.info(`Logged in as ${client.user.tag}!`);
+});
 
-    processQueue() {
-        while(this.queue.length > 0) {
-            const video = this.queue.shift();
-            // Logic for processing the video
-            logger.info(`Processing video: ${video}`);
-        }
+client.on('messageCreate', async msg => {
+  if (msg.content.startsWith('!addVideo')) {
+    if (videoQueue.length >= MAX_VIDEO_QUEUE) {
+      msg.reply('The video queue is full!');
+      return;
     }
+    const videoUrl = msg.content.split(' ')[1];
+    videoQueue.push(videoUrl);
+    msg.reply(`Video added to queue. Current queue: ${videoQueue.length}`);
+    logger.info(`Video added: ${videoUrl}`);
+  }
+});
+
+async function recognizeMusic(url) {
+  try {
+    const result = await AudD.recognize({url});
+    logger.info(`Music recognized: ${result.title}`);
+    return result.title;
+  } catch (error) {
+    logger.error('Error recognizing music:', error);
+  }
 }
 
-const videoQueue = new VideoQueue();
-
-// AudD API integration
-async function fetchAudioInfo(audioFile) {
-    try {
-        const response = await axios.post('https://api.audd.io/', {
-            api_token: 'YOUR_AUDD_API_TOKEN',
-            file: fs.createReadStream(audioFile),
-        });
-        return response.data;
-    } catch (error) {
-        logger.error('AudD API error: ', error);
-    }
+function processVideo(mode) {
+  // Logic for video processing depending on mode
 }
 
-// Discord Bot Commands
-discordClient.on('messageCreate', async (message) => {
-    if (message.content === '!queue') {
-        // Example command handling
-        message.channel.send('Current video queue: ' + videoQueue.queue.join(', '));
-    }
-});
+client.login('YOUR_BOT_TOKEN');
 
-// Start the Discord bot
-discordClient.login('YOUR_DISCORD_BOT_TOKEN');
-
-// Failsafe processing and error handling
-process.on('uncaughtException', (err) => {
-    logger.error('Uncaught Exception: ', err);
-});
-
-app.listen(3000, () => {
-    logger.info('Server is running on port 3000');
-});
+// Include more features like economy system, leaderboard, and health monitoring here
