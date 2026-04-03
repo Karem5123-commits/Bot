@@ -3,7 +3,6 @@
 <head>
 <meta charset="UTF-8">
 <title>Ultra AI Dashboard</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
 body {
@@ -14,186 +13,149 @@ body {
 }
 
 header {
-  padding: 20px;
   background: #020617;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-h1 { margin: 0; }
-
-nav button {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  margin-left: 20px;
-  cursor: pointer;
-  font-size: 16px;
-}
-
-nav button:hover {
-  color: white;
+  padding: 15px;
+  text-align: center;
+  font-size: 24px;
+  font-weight: bold;
+  color: #38bdf8;
 }
 
 .container {
   padding: 20px;
 }
 
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px,1fr));
+.grid {
+  display: flex;
+  flex-wrap: wrap;
   gap: 15px;
 }
 
 .card {
   background: #1e293b;
-  padding: 20px;
+  padding: 15px;
   border-radius: 12px;
-  transition: 0.2s;
+  flex: 1;
+  min-width: 200px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.4);
 }
 
-.card:hover {
-  transform: translateY(-3px);
-  background: #334155;
-}
-
-.card h2 {
-  margin: 0;
-  font-size: 14px;
+.card h3 {
+  margin: 0 0 10px 0;
   color: #94a3b8;
 }
 
-.card p {
-  font-size: 26px;
-  margin: 8px 0 0;
+.value {
+  font-size: 22px;
+  font-weight: bold;
 }
 
-.hidden { display: none; }
-
-table {
-  width: 100%;
-  border-collapse: collapse;
+.leaderboard {
   margin-top: 20px;
 }
 
-th, td {
-  padding: 12px;
+.player {
+  padding: 10px;
   border-bottom: 1px solid #334155;
+  display: flex;
+  justify-content: space-between;
 }
 
-tr:hover {
-  background: #1e293b;
+.player:hover {
+  background: #334155;
 }
 
-.status {
-  color: #22c55e;
-  font-weight: bold;
+.rank {
+  color: #facc15;
+}
+
+.footer {
+  text-align: center;
+  margin-top: 20px;
+  color: #64748b;
 }
 </style>
-</head>
 
+</head>
 <body>
 
-<header>
-  <h1>🔥 Ultra AI Dashboard</h1>
-  <nav>
-    <button onclick="showPage('dashboard')">Dashboard</button>
-    <button onclick="showPage('leaderboard')">Leaderboard</button>
-  </nav>
-</header>
+<header>🔥 Ultra AI Dashboard</header>
 
 <div class="container">
 
-<div id="dashboard">
-  <div class="cards">
-    <div class="card"><h2>Total Users</h2><p id="users">0</p></div>
-    <div class="card"><h2>Submissions</h2><p id="subs">0</p></div>
-    <div class="card"><h2>Processed</h2><p id="processed">0</p></div>
-    <div class="card"><h2>Errors</h2><p id="errors">0</p></div>
-    <div class="card"><h2>Queue</h2><p id="queue">0</p></div>
-    <div class="card"><h2>Status</h2><p class="status">ONLINE</p></div>
+<div class="grid">
+
+  <div class="card">
+    <h3>👥 Users</h3>
+    <div id="users" class="value">0</div>
   </div>
+
+  <div class="card">
+    <h3>📤 Submissions</h3>
+    <div id="subs" class="value">0</div>
+  </div>
+
+  <div class="card">
+    <h3>🎬 Processed</h3>
+    <div id="processed" class="value">0</div>
+  </div>
+
+  <div class="card">
+    <h3>🏆 Season</h3>
+    <div id="season" class="value">Loading...</div>
+  </div>
+
 </div>
 
-<div id="leaderboard" class="hidden">
-  <h2>🏆 Top Players</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>User</th>
-        <th>MMR</th>
-        <th>Rank</th>
-        <th>Submissions</th>
-      </tr>
-    </thead>
-    <tbody id="leaderboardBody"></tbody>
-  </table>
+<div class="card leaderboard">
+  <h2>🏆 Leaderboard</h2>
+  <div id="leaderboard"></div>
+</div>
+
+<div class="footer">
+Ultra AI Engine • Live Dashboard
 </div>
 
 </div>
 
 <script>
 
-const API_BASE = "https://bot-production-d4a9.up.railway.app";
-
-function showPage(page) {
-  document.getElementById("dashboard").classList.add("hidden");
-  document.getElementById("leaderboard").classList.add("hidden");
-  document.getElementById(page).classList.remove("hidden");
-}
-
 async function loadDashboard() {
   try {
-    const res = await fetch(API_BASE + "/api/dashboard");
-    const data = await res.json();
+    const dash = await fetch('/api/dashboard').then(r => r.json());
+    const lb = await fetch('/api/leaderboard').then(r => r.json());
+    const season = await fetch('/api/season').then(r => r.json());
 
-    document.getElementById("users").innerText = data.users || 0;
-    document.getElementById("subs").innerText = data.submissions || 0;
-    document.getElementById("processed").innerText = data.stats.totalProcessed || 0;
-    document.getElementById("errors").innerText = data.stats.totalErrors || 0;
-    document.getElementById("queue").innerText = data.queue.current + "/" + data.queue.max;
+    document.getElementById('users').innerText = dash.users || 0;
+    document.getElementById('subs').innerText = dash.submissions || 0;
+    document.getElementById('processed').innerText = dash.stats?.totalProcessed || 0;
 
-  } catch (e) {
-    console.error(e);
-  }
-}
+    document.getElementById('season').innerText =
+      `Season ${season.season} (${season.daysLeft} days left)`;
 
-async function loadLeaderboard() {
-  try {
-    const res = await fetch(API_BASE + "/api/leaderboard");
-    const data = await res.json();
+    const lbDiv = document.getElementById('leaderboard');
+    lbDiv.innerHTML = '';
 
-    const body = document.getElementById("leaderboardBody");
-    body.innerHTML = "";
+    lb.forEach((user, index) => {
+      const div = document.createElement('div');
+      div.className = 'player';
 
-    data.slice(0, 20).forEach(user => {
-      const row = document.createElement("tr");
-
-      row.innerHTML = `
-        <td>${user.position}</td>
-        <td>${user.username}</td>
-        <td>${user.mmr}</td>
-        <td>${user.rank}</td>
-        <td>${user.submissions}</td>
+      div.innerHTML = `
+        <span class="rank">#${index + 1}</span>
+        <span>${user.username}</span>
+        <span>${user.mmr} MMR</span>
       `;
 
-      body.appendChild(row);
+      lbDiv.appendChild(div);
     });
 
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error('Dashboard load error:', err);
   }
 }
 
 loadDashboard();
-loadLeaderboard();
-
-setInterval(() => {
-  loadDashboard();
-  loadLeaderboard();
-}, 10000);
+setInterval(loadDashboard, 5000);
 
 </script>
 
