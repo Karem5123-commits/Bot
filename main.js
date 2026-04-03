@@ -227,4 +227,21 @@ client.on("interactionCreate", async i => {
 
 // ================= LOGIN =================
 console.log("🚀 Logging in...");
-client.login(process.env.DISCORD_TOKEN);
+// ================= STARTUP =================
+console.log("🚀 Starting bot...");
+
+client.once("ready", () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+});
+
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log("✅ Discord login successful"))
+  .catch(err => console.error("❌ Discord login failed:", err));
+
+// ================= DASHBOARD =================
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`🌐 Dashboard running on port ${PORT}`);
+  console.log(`🔗 URL: https://${process.env.RAILWAY_STATIC_URL || "your-railway-url"}`);
+});
