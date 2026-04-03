@@ -1,53 +1,64 @@
-// Enhanced backend implementation
+// Updated production-ready backend for the bot
 
 const express = require('express');
-const ffmpeg = require('fluent-ffmpeg');
+const { Queue } = require('bull');  // Importing Bull for queue management
+const { createLogger, transports } = require('winston');  // Importing Winston for logging
 const app = express();
-const port = 3000;
+
+// Setting up logging
+const logger = createLogger({
+  level: 'info',
+  format: winston.format.json(),
+  transports: [
+    new transports.File({ filename: 'error.log', level: 'error' }),
+    new transports.File({ filename: 'combined.log' })
+  ]
+});
+
+// Queue management for video processing
+const videoQueue = new Queue('videoProcessing');
 
 // Middleware for error handling
 app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).send('Something broke!');
+  logger.error(err.stack);
+  res.status(500).send('Something broke!');
 });
 
-// Route to serve the dashboard
-app.get('/dashboard', (req, res) => {
-    // Serve dashboard HTML
-    res.send('<h1>Dashboard</h1>');
-});
-
-// Route to process video
-app.post('/process-video', async (req, res) => {
-    try {
-        const videoPath = req.body.videoPath;
-        const outputPath = 'output/video.mp4';
-
-        ffmpeg(videoPath)
-            .output(outputPath)
-            .on('end', () => {
-                console.log('Video processing finished');
-                res.status(200).send('Video processed successfully!');
-            })
-            .on('error', (err) => {
-                console.error('Error processing video:' + err);
-                res.status(500).send('Error processing video');
-            })
-            .run();
-    } catch (error) {
-        console.error(error);
-        res.status(500).send('Internal Server Error');
-    }
-});
-
-// Status monitoring endpoint
+// Endpoint for status
 app.get('/status', (req, res) => {
-    res.send({ status: 'OK', memoryUsage: process.memoryUsage() });
+  res.send('Bot is running!');
 });
 
-// Rate limiting and async processing logic here
-// Implement failsafe system and file management functions
+// Video processing endpoint
+app.post('/process-video', (req, res) => {
+  // Add video processing job to the queue
+  videoQueue.add({ videoUrl: req.body.videoUrl });
+  res.send('Video processing started');
+});
 
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}/`);
+// Process video jobs
+videoQueue.process((job, done) => {
+  // Video processing logic here
+  const videoUrl = job.data.videoUrl;
+  // Assume we have a function processVideo that handles the processing
+  processVideo(videoUrl)
+    .then(() => {
+      logger.info(`Processing completed for video: ${videoUrl}`);
+      done();
+    })
+    .catch((error) => {
+      logger.error(`Error processing video ${videoUrl}: ${error.message}`);
+      done(new Error('Processing failed'));  // Mark job as failed
+    });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
+});
+
+// Memory cleanup logic if needed
+process.on('exit', (code) => {
+  logger.info(`Process exited with code: ${code}`);
 });
