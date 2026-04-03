@@ -1,30 +1,19 @@
-import 'dotenv/config';
-import {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  EmbedBuilder
-} from "discord.js";
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const { Client, GatewayIntentBits, Partials } = require("discord.js");
 
-import mongoose from "mongoose";
-import express from "express";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
-import ytdl from "yt-dlp-exec";
-import { v4 as uuidv4 } from "uuid";
-import fs from "fs/promises";
-import path from "path";
-import { User, GuildConfig } from "./models.js";
+const app = express();
+app.use(express.json());
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+// ✅ FIX CORS (NO MORE DASHBOARD ERRORS)
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type", "key"]
+}));
 
-const PREFIX = "?";
-const ADMIN_KEY = process.env.ADMIN_KEY;
-const MAIN_GUILD_ID = process.env.GUILD_ID;
-
-const TEMP_DIR = path.join(process.cwd(), "temp");
-await fs.mkdir(TEMP_DIR, { recursive: true }).catch(() => {});
-
+// ================== DISCORD BOT ==================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -35,212 +24,155 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ===== DATABASE =====
-await mongoose.connect(process.env.MONGO_URL);
-console.log("✅ DB Connected");
+const PREFIX = "?";
+const MAIN_GUILD_ID = process.env.GUILD_ID;
 
-// ===== EXPRESS =====
-const app = express();
-app.use(express.json());
+// ================== SIMPLE DB ==================
+const users = new Map();
 
-// ===== COMMAND TOGGLES =====
-let commandToggles = {};
-
-// ===== RANK SYSTEM =====
-const RANKS = [
-  { name: "Bronze", mmr: 0, color: "#8d6e63", icon: "🥉" },
-  { name: "Silver", mmr: 1200, color: "#b0bec5", icon: "🥈" },
-  { name: "Gold", mmr: 1800, color: "#f1c40f", icon: "🥇" },
-  { name: "Platinum", mmr: 2500, color: "#00bcd4", icon: "💎" },
-  { name: "Diamond", mmr: 3500, color: "#3498db", icon: "🛡️" },
-  { name: "Master", mmr: 4800, color: "#9b59b6", icon: "🔮" },
-  { name: "Legend", mmr: 6500, color: "#e74c3c", icon: "👑" }
+// ================== RANK SYSTEM ==================
+const ranks = [
+  { name: "Bronze", min: 0 },
+  { name: "Silver", min: 100 },
+  { name: "Gold", min: 300 },
+  { name: "Platinum", min: 600 },
+  { name: "Diamond", min: 1000 },
+  { name: "Legend", min: 1500 }
 ];
 
-const getRank = (elo) =>
-  [...RANKS].reverse().find(r => elo >= r.mmr) || RANKS[0];
-
-const calcElo = (score, elo) => {
-  return Math.round((score - 5) * 40);
-};
-
-// ===== APPLY ROLE =====
-async function applyRank(member, elo) {
-  const rank = getRank(elo);
-  let role = member.guild.roles.cache.find(r => r.name === rank.name);
-
-  if (!role) {
-    role = await member.guild.roles.create({
-      name: rank.name,
-      color: rank.color
-    });
-  }
-
-  const rankNames = RANKS.map(r => r.name);
-
-  const removeRoles = member.roles.cache.filter(r =>
-    rankNames.includes(r.name) && r.name !== rank.name
-  );
-
-  await member.roles.remove(removeRoles).catch(() => {});
-  await member.roles.add(role).catch(() => {});
+function getRank(elo) {
+  return ranks.slice().reverse().find(r => elo >= r.min) || ranks[0];
 }
 
-// ===== READY =====
-client.once("clientReady", () => {
-  console.log(`🔥 ${client.user.tag} ONLINE`);
+// ================== READY ==================
+client.once("ready", () => {
+  console.log(`🔥 Bot online as ${client.user.tag}`);
 });
 
-// ===== MESSAGE COMMANDS =====
+// ================== AUTO BRONZE ROLE ==================
+client.on("guildMemberAdd", async member => {
+  try {
+    let role = member.guild.roles.cache.find(r => r.name === "Bronze");
+    if (!role) role = await member.guild.roles.create({ name: "Bronze" });
+
+    await member.roles.add(role);
+  } catch (err) {
+    console.log("Role error:", err.message);
+  }
+});
+
+// ================== MESSAGE COMMANDS ==================
 client.on("messageCreate", async msg => {
   if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
 
-  const args = msg.content.slice(1).split(" ");
+  const args = msg.content.slice(PREFIX.length).trim().split(/ +/);
   const cmd = args.shift().toLowerCase();
 
-  // TOGGLE CHECK
-  if (commandToggles[cmd] === false) {
-    return msg.reply("❌ Command disabled");
-  }
+  let user = users.get(msg.author.id) || { elo: 0, coins: 0 };
+  users.set(msg.author.id, user);
 
-  let user = await User.findOneAndUpdate(
-    { userId: msg.author.id },
-    { username: msg.author.username, elo: 1000 },
-    { upsert: true, new: true }
-  );
+  // ===== BASIC COMMANDS =====
+  if (cmd === "ping") return msg.reply("🏓 Pong!");
 
-  // ===== COMMANDS =====
+  if (cmd === "balance")
+    return msg.reply(`💰 Coins: ${user.coins}`);
 
   if (cmd === "profile") {
     const rank = getRank(user.elo);
+    return msg.reply(`🏆 Elo: ${user.elo}\nRank: ${rank.name}`);
+  }
 
-    return msg.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`${rank.icon} ${msg.author.username}`)
-          .setColor(rank.color)
-          .addFields(
-            { name: "ELO", value: `${user.elo}`, inline: true },
-            { name: "Rank", value: rank.name, inline: true }
-          )
-      ]
+  if (cmd === "leaderboard") {
+    const top = [...users.entries()]
+      .sort((a, b) => b[1].elo - a[1].elo)
+      .slice(0, 10);
+
+    let text = "🏆 Leaderboard:\n";
+    top.forEach((u, i) => {
+      text += `${i + 1}. <@${u[0]}> - ${u[1].elo}\n`;
     });
+
+    return msg.reply(text);
   }
 
-  if (cmd === "coinflip") {
-    return msg.reply(Math.random() > 0.5 ? "Heads" : "Tails");
-  }
-
-  if (cmd === "balance") {
-    return msg.reply(`💰 Coins: ${user.coins || 0}`);
-  }
-
-  if (cmd === "ping") {
-    return msg.reply("🏓 Pong");
+  if (cmd === "daily") {
+    user.coins += 100;
+    return msg.reply("🎁 You got 100 coins!");
   }
 });
 
-// ===== JOIN =====
-client.on("guildMemberAdd", async member => {
-  await User.findOneAndUpdate(
-    { userId: member.id },
-    { elo: 1000 },
-    { upsert: true }
-  );
+// ================== EXPRESS ROUTES ==================
 
-  await applyRank(member, 1000);
+// ✅ ROOT FIX (MOST IMPORTANT)
+app.get("/", (req, res) => {
+  res.send("Bot running");
 });
 
-// ===== DASHBOARD ROUTES =====
+// ✅ DASHBOARD DATA
+app.get("/dashboard", (req, res) => {
+  const allUsers = [...users.values()];
+  const total = allUsers.length;
+  const highest = Math.max(0, ...allUsers.map(u => u.elo));
+  const avg = total ? Math.floor(allUsers.reduce((a, b) => a + b.elo, 0) / total) : 0;
+  const coins = allUsers.reduce((a, b) => a + b.coins, 0);
 
-// GET dashboard
-app.get("/dashboard", async (_, res) => {
-  const users = await User.countDocuments();
-  const top = await User.find().sort({ elo: -1 }).limit(10);
+  const leaderboard = [...users.entries()]
+    .sort((a, b) => b[1].elo - a[1].elo)
+    .slice(0, 10)
+    .map(([id, data]) => ({
+      id,
+      elo: data.elo
+    }));
 
-  res.json({
-    totalUsers: users,
-    leaderboard: top
-  });
+  res.json({ total, highest, avg, coins, leaderboard });
 });
 
-// RUN COMMAND
+// ✅ RUN COMMAND FROM DASHBOARD
 app.post("/run-command", async (req, res) => {
   try {
-    if (req.headers.key !== ADMIN_KEY)
+    if (req.headers.key !== process.env.ADMIN_KEY)
       return res.status(403).send("Forbidden");
 
-    const { command, args, userId } = req.body;
+    const { command, args = [], userId } = req.body;
 
     const guild = client.guilds.cache.get(MAIN_GUILD_ID);
-    const channel = guild.channels.cache
-      .filter(c => c.isTextBased())
-      .first();
+    if (!guild) return res.status(400).send("No guild");
+
+    const channel = guild.channels.cache.find(c => c.isTextBased());
+    if (!channel) return res.status(400).send("No channel");
 
     const fakeMsg = {
       author: { id: userId || "dashboard", bot: false },
       guild,
       channel,
-      member: await guild.members.fetch(userId).catch(() => null),
-      reply: (msg) => channel.send(`📊 ${msg}`),
-      content: `?${command} ${args?.join(" ") || ""}`
+      content: `${PREFIX}${command} ${args.join(" ")}`,
+      reply: (msg) => channel.send(`📊 Dashboard: ${msg}`)
     };
 
     client.emit("messageCreate", fakeMsg);
 
-    res.send("OK");
-  } catch {
+    res.send("Command executed");
+  } catch (err) {
+    console.log(err);
     res.status(500).send("Error");
   }
 });
 
-// TOGGLE COMMAND
-app.post("/toggle-command", (req, res) => {
-  try {
-    if (req.headers.key !== ADMIN_KEY)
-      return res.status(403).send("Forbidden");
+// ✅ SUBMIT SCORE (ELO SYSTEM)
+app.post("/submit-score", (req, res) => {
+  const { userId, score } = req.body;
 
-    const { command, enabled } = req.body;
+  let user = users.get(userId) || { elo: 0, coins: 0 };
+  user.elo += score;
 
-    commandToggles[command] = enabled;
+  users.set(userId, user);
 
-    res.json({ success: true });
-  } catch {
-    res.status(500).send("Error");
-  }
+  res.send("Score updated");
 });
 
-// ===== QUALITY METHOD =====
-app.post("/quality", async (req, res) => {
-  try {
-    const { url } = req.body;
-    const id = uuidv4();
+// ================== START SERVER ==================
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🌐 Server running on ${PORT}`));
 
-    const input = path.join(TEMP_DIR, `${id}.mp4`);
-    const output = path.join(TEMP_DIR, `out_${id}.mp4`);
-
-    await ytdl(url, { output: input });
-
-    await new Promise((resolve, reject) => {
-      ffmpeg(input)
-        .videoFilters(["scale=1920:-1"])
-        .save(output)
-        .on("end", resolve)
-        .on("error", reject);
-    });
-
-    res.download(output);
-
-    await fs.unlink(input).catch(() => {});
-    await fs.unlink(output).catch(() => {});
-  } catch {
-    res.status(500).send("Error");
-  }
-});
-
-// ===== START =====
-app.listen(process.env.PORT || 3000, () =>
-  console.log("🌐 Web running")
-);
-
-client.login(process.env.DISCORD_TOKEN);
+// ================== LOGIN ==================
+client.login(process.env.TOKEN);
