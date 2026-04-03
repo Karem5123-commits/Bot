@@ -3,6 +3,12 @@ import {
   Client,
   GatewayIntentBits,
   Partials,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
   REST,
   Routes,
   EmbedBuilder,
@@ -12,17 +18,12 @@ import {
 
 import mongoose from "mongoose";
 import express from "express";
-import cors from "cors";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import ytdl from "yt-dlp-exec";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
 import path from "path";
-
-// ===== CONFIG =====
-const PREFIX = "?";
-const MAIN_GUILD_ID = "1488203882130837704";
 
 // ===== SYSTEM SETUP =====
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -42,236 +43,183 @@ const client = new Client({
 
 // ===== DATABASE =====
 if (!process.env.MONGO_URL) {
-  console.error("❌ MONGO_URL missing");
+  console.error("❌ MONGO_URL is missing");
   process.exit(1);
 }
 
-await mongoose.connect(process.env.MONGO_URL);
-console.log("✅ MongoDB Connected");
-
-// ===== MODELS =====
-const userSchema = new mongoose.Schema({
-  userId: String,
-  username: String,
-  elo: { type: Number, default: 1000 },
-  streak: { type: Number, default: 0 },
-  coins: { type: Number, default: 0 }
-});
-
-const settingsSchema = new mongoose.Schema({
-  guildId: String,
-  gamble: { type: Boolean, default: true },
-  moderation: { type: Boolean, default: true },
-  economy: { type: Boolean, default: true },
-  welcome: { type: Boolean, default: true }
-});
-
-const User = mongoose.model("User", userSchema);
-const Settings = mongoose.model("Settings", settingsSchema);
-
-// ===== HELPERS =====
-async function getSettings(guildId) {
-  let s = await Settings.findOne({ guildId });
-  if (!s) s = await Settings.create({ guildId });
-  return s;
+try {
+  await mongoose.connect(process.env.MONGO_URL);
+  console.log("✅ MongoDB Connected");
+} catch (err) {
+  console.error("❌ MongoDB FAILED:", err.message);
+  process.exit(1);
 }
 
-const RANKS = [
-  { name: "Bronze", mmr: 0 },
-  { name: "Silver", mmr: 1200 },
-  { name: "Gold", mmr: 1800 },
-  { name: "Platinum", mmr: 2500 },
-  { name: "Diamond", mmr: 3500 },
-  { name: "Master", mmr: 4800 },
-  { name: "Legend", mmr: 6500 }
-];
+// ===== RANK SYSTEM =====
+const CONFIG = {
+  RANKS: [
+    { name: "Bronze", mmr: 0, color: "#8d6e63", icon: "🥉" },
+    { name: "Silver", mmr: 1200, color: "#b0bec5", icon: "🥈" },
+    { name: "Gold", mmr: 1800, color: "#f1c40f", icon: "🥇" },
+    { name: "Platinum", mmr: 2500, color: "#00bcd4", icon: "💎" },
+    { name: "Diamond", mmr: 3500, color: "#3498db", icon: "🛡️" },
+    { name: "Master", mmr: 4800, color: "#9b59b6", icon: "🔮" },
+    { name: "Legend", mmr: 6500, color: "#e74c3c", icon: "👑" }
+  ]
+};
 
-function getRank(elo) {
-  return [...RANKS].reverse().find(r => elo >= r.mmr) || RANKS[0];
-}
+const getRank = (elo) =>
+  [...CONFIG.RANKS].reverse().find(r => elo >= r.mmr) || CONFIG.RANKS[0];
 
-async function updateRank(member, elo) {
-  const rank = getRank(elo);
-
-  let role = member.guild.roles.cache.find(r => r.name === rank.name);
-  if (!role) {
-    role = await member.guild.roles.create({ name: rank.name });
-  }
-
-  const rolesToRemove = member.roles.cache.filter(r =>
-    RANKS.map(x => x.name).includes(r.name) && r.name !== rank.name
-  );
-
-  await member.roles.remove(rolesToRemove).catch(() => {});
-  await member.roles.add(role).catch(() => {});
-}
+const calcElo = (score, elo, streak) => {
+  let gain = (score - 5.5) * 50;
+  if (streak >= 3) gain *= 1.5;
+  if (elo > 3500) gain *= 0.7;
+  return Math.round(gain);
+};
 
 // ===== READY =====
 client.once("clientReady", async () => {
   console.log(`🔥 ONLINE: ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: "Overpowered Bot", type: ActivityType.Playing }],
+    activities: [
+      { name: "made from discord.gg/g2Ff4vHfhM", type: ActivityType.Playing }
+    ],
     status: "online"
   });
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
   const commands = [
-    new SlashCommandBuilder().setName("profile").setDescription("View stats"),
+    new SlashCommandBuilder()
+      .setName("profile")
+      .setDescription("View stats"),
+
+    new SlashCommandBuilder()
+      .setName("submit")
+      .setDescription("Submit clip"),
+
     new SlashCommandBuilder()
       .setName("quality_method")
       .setDescription("Enhance video")
-      .addStringOption(o => o.setName("url").setRequired(true))
-  ].map(c => c.toJSON());
+      .addStringOption(option =>
+        option
+          .setName("url")
+          .setDescription("Video URL")
+          .setRequired(true)
+      )
+  ].map(cmd => cmd.toJSON());
 
   await rest.put(
-    Routes.applicationGuildCommands(client.user.id, MAIN_GUILD_ID),
+    Routes.applicationGuildCommands(client.user.id, "1488203882130837704"),
     { body: commands }
   );
 
   console.log("⚡ Commands synced");
 });
 
-// ===== MESSAGE COMMANDS =====
-client.on("messageCreate", async msg => {
-  if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
-
-  const args = msg.content.slice(PREFIX.length).trim().split(/ +/);
-  const cmd = args.shift().toLowerCase();
-
-  const settings = await getSettings(msg.guild.id);
-
-  let user = await User.findOne({ userId: msg.author.id });
-  if (!user) {
-    user = await User.create({
-      userId: msg.author.id,
-      username: msg.author.username
-    });
-  }
-
-  // ===== GAMBLE =====
-  if (cmd === "gamble") {
-    if (!settings.gamble) return msg.reply("❌ Gamble disabled");
-
-    const amount = Number(args[0]) || 0;
-    if (amount <= 0) return msg.reply("Enter valid amount");
-
-    const win = Math.random() > 0.5;
-    user.coins += win ? amount : -amount;
-    await user.save();
-
-    return msg.reply(win ? `🎉 Won ${amount}` : `💀 Lost ${amount}`);
-  }
-
-  // ===== PROFILE =====
-  if (cmd === "profile") {
-    const rank = getRank(user.elo);
-
-    return msg.reply(
-      `🏆 ${msg.author.username}\nELO: ${user.elo}\nRank: ${rank.name}`
-    );
-  }
-
-  // ===== LEADERBOARD =====
-  if (cmd === "leaderboard") {
-    const top = await User.find().sort({ elo: -1 }).limit(10);
-
-    return msg.reply(
-      top.map((u, i) => `${i + 1}. ${u.username} - ${u.elo}`).join("\n")
-    );
-  }
-});
-
-// ===== SLASH COMMANDS =====
+// ===== INTERACTIONS =====
 client.on("interactionCreate", async i => {
-  if (!i.isChatInputCommand()) return;
+  try {
+    if (i.isChatInputCommand()) {
 
-  if (i.commandName === "profile") {
-    const user = await User.findOne({ userId: i.user.id });
-    if (!user) return i.reply("No data");
+      if (i.commandName === "profile") {
+        const embed = new EmbedBuilder()
+          .setTitle(`👤 ${i.user.username}`)
+          .setDescription("Your profile");
 
-    return i.reply(`ELO: ${user.elo}`);
-  }
+        return i.reply({ embeds: [embed] });
+      }
 
-  if (i.commandName === "quality_method") {
-    await i.deferReply();
+      if (i.commandName === "quality_method") {
+        await i.deferReply();
 
-    try {
-      const url = i.options.getString("url");
-      const id = uuidv4();
+        try {
+          const url = i.options.getString("url");
+          const id = uuidv4();
 
-      const input = path.join(TEMP_DIR, `${id}.mp4`);
-      const output = path.join(TEMP_DIR, `out_${id}.mp4`);
+          const input = path.join(TEMP_DIR, `${id}.mp4`);
+          const output = path.join(TEMP_DIR, `out_${id}.mp4`);
 
-      await ytdl(url, { output: input });
+          await ytdl(url, { output: input });
 
-      await new Promise((res, rej) => {
-        ffmpeg(input)
-          .videoFilters(["scale=1920:-1"])
-          .save(output)
-          .on("end", res)
-          .on("error", rej);
+          await new Promise((res, rej) => {
+            ffmpeg(input)
+              .videoFilters(["scale=1920:-1"])
+              .save(output)
+              .on("end", res)
+              .on("error", rej);
+          });
+
+          await i.editReply({ files: [output] });
+
+          await fs.unlink(input).catch(() => {});
+          await fs.unlink(output).catch(() => {});
+        } catch {
+          await i.editReply("❌ Processing failed");
+        }
+      }
+
+      if (i.commandName === "submit") {
+        const modal = new ModalBuilder()
+          .setCustomId("submit")
+          .setTitle("Submit Clip");
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("url")
+              .setLabel("Clip URL")
+              .setStyle(TextInputStyle.Short)
+              .setRequired(true)
+          )
+        );
+
+        return i.showModal(modal);
+      }
+    }
+
+    if (i.isModalSubmit()) {
+      const url = i.fields.getTextInputValue("url");
+
+      const channel = await client.channels.fetch(process.env.REVIEW_CHANNEL_ID);
+
+      const row = new ActionRowBuilder().addComponents(
+        [4, 7, 10].map(score =>
+          new ButtonBuilder()
+            .setCustomId(`rank_${score}_${i.user.id}`)
+            .setLabel(`Score ${score}`)
+            .setStyle(ButtonStyle.Primary)
+        )
+      );
+
+      await channel.send({
+        content: `Submission from <@${i.user.id}>\n${url}`,
+        components: [row]
       });
 
-      await i.editReply({ files: [output] });
-    } catch {
-      await i.editReply("❌ Failed");
+      return i.reply({ content: "✅ Submitted", ephemeral: true });
     }
+
+    if (i.isButton()) {
+      const [_, score, userId] = i.customId.split("_");
+
+      return i.update({
+        content: `✅ Score ${score} received`,
+        components: []
+      });
+    }
+
+  } catch (err) {
+    console.error("Interaction error:", err);
   }
 });
 
-// ===== EXPRESS API =====
+// ===== WEB =====
 const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Dashboard
-app.get("/dashboard", async (_, res) => {
-  const top = await User.find().sort({ elo: -1 }).limit(10);
-  res.json(top);
-});
-
-// Run command
-app.post("/run-command", async (req, res) => {
-  if (req.headers.key !== process.env.ADMIN_KEY)
-    return res.status(403).send("Forbidden");
-
-  const { command, args = [], userId } = req.body;
-
-  const guild = client.guilds.cache.get(MAIN_GUILD_ID);
-  const channel = guild.channels.cache.find(c => c.isTextBased());
-
-  const fakeMsg = {
-    content: `${PREFIX}${command} ${args.join(" ")}`,
-    author: { id: userId || "dashboard", bot: false },
-    guild,
-    channel,
-    member: userId ? await guild.members.fetch(userId).catch(() => null) : null,
-    reply: (m) => channel.send(`📊 ${m}`)
-  };
-
-  client.emit("messageCreate", fakeMsg);
-
-  res.send("OK");
-});
-
-// Toggle
-app.post("/toggle", async (req, res) => {
-  if (req.headers.key !== process.env.ADMIN_KEY)
-    return res.status(403).send("Forbidden");
-
-  const { setting, value } = req.body;
-
-  const s = await getSettings(MAIN_GUILD_ID);
-  s[setting] = value;
-  await s.save();
-
-  res.json({ success: true });
-});
-
-// ===== START =====
 app.get("/", (_, res) => res.send("Bot running"));
 app.listen(process.env.PORT || 3000);
 
+// ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
