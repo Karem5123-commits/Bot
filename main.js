@@ -1,12 +1,12 @@
-require("dotenv").config();
-const express = require("express");
-const cors = require("cors");
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import { Client, GatewayIntentBits, Partials } from "discord.js";
 
 const app = express();
-app.use(express.json());
 
-// ✅ FIX CORS (NO MORE DASHBOARD ERRORS)
+// ================== MIDDLEWARE ==================
+app.use(express.json());
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST"],
@@ -27,7 +27,7 @@ const client = new Client({
 const PREFIX = "?";
 const MAIN_GUILD_ID = process.env.GUILD_ID;
 
-// ================== SIMPLE DB ==================
+// ================== MEMORY DB ==================
 const users = new Map();
 
 // ================== RANK SYSTEM ==================
@@ -41,28 +41,29 @@ const ranks = [
 ];
 
 function getRank(elo) {
-  return ranks.slice().reverse().find(r => elo >= r.min) || ranks[0];
+  return [...ranks].reverse().find(r => elo >= r.min) || ranks[0];
 }
 
-// ================== READY ==================
+// ================== BOT READY ==================
 client.once("ready", () => {
   console.log(`🔥 Bot online as ${client.user.tag}`);
 });
 
-// ================== AUTO BRONZE ROLE ==================
-client.on("guildMemberAdd", async member => {
+// ================== AUTO ROLE ==================
+client.on("guildMemberAdd", async (member) => {
   try {
     let role = member.guild.roles.cache.find(r => r.name === "Bronze");
-    if (!role) role = await member.guild.roles.create({ name: "Bronze" });
-
+    if (!role) {
+      role = await member.guild.roles.create({ name: "Bronze" });
+    }
     await member.roles.add(role);
   } catch (err) {
     console.log("Role error:", err.message);
   }
 });
 
-// ================== MESSAGE COMMANDS ==================
-client.on("messageCreate", async msg => {
+// ================== COMMANDS ==================
+client.on("messageCreate", async (msg) => {
   if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
 
   const args = msg.content.slice(PREFIX.length).trim().split(/ +/);
@@ -71,15 +72,20 @@ client.on("messageCreate", async msg => {
   let user = users.get(msg.author.id) || { elo: 0, coins: 0 };
   users.set(msg.author.id, user);
 
-  // ===== BASIC COMMANDS =====
   if (cmd === "ping") return msg.reply("🏓 Pong!");
 
-  if (cmd === "balance")
+  if (cmd === "balance") {
     return msg.reply(`💰 Coins: ${user.coins}`);
+  }
 
   if (cmd === "profile") {
     const rank = getRank(user.elo);
     return msg.reply(`🏆 Elo: ${user.elo}\nRank: ${rank.name}`);
+  }
+
+  if (cmd === "daily") {
+    user.coins += 100;
+    return msg.reply("🎁 You got 100 coins!");
   }
 
   if (cmd === "leaderboard") {
@@ -94,16 +100,11 @@ client.on("messageCreate", async msg => {
 
     return msg.reply(text);
   }
-
-  if (cmd === "daily") {
-    user.coins += 100;
-    return msg.reply("🎁 You got 100 coins!");
-  }
 });
 
-// ================== EXPRESS ROUTES ==================
+// ================== ROUTES ==================
 
-// ✅ ROOT FIX (MOST IMPORTANT)
+// ✅ ROOT FIX
 app.get("/", (req, res) => {
   res.send("Bot running");
 });
@@ -113,25 +114,25 @@ app.get("/dashboard", (req, res) => {
   const allUsers = [...users.values()];
   const total = allUsers.length;
   const highest = Math.max(0, ...allUsers.map(u => u.elo));
-  const avg = total ? Math.floor(allUsers.reduce((a, b) => a + b.elo, 0) / total) : 0;
+  const avg = total
+    ? Math.floor(allUsers.reduce((a, b) => a + b.elo, 0) / total)
+    : 0;
   const coins = allUsers.reduce((a, b) => a + b.coins, 0);
 
   const leaderboard = [...users.entries()]
     .sort((a, b) => b[1].elo - a[1].elo)
     .slice(0, 10)
-    .map(([id, data]) => ({
-      id,
-      elo: data.elo
-    }));
+    .map(([id, data]) => ({ id, elo: data.elo }));
 
   res.json({ total, highest, avg, coins, leaderboard });
 });
 
-// ✅ RUN COMMAND FROM DASHBOARD
+// ✅ RUN COMMAND (DASHBOARD)
 app.post("/run-command", async (req, res) => {
   try {
-    if (req.headers.key !== process.env.ADMIN_KEY)
+    if (req.headers.key !== process.env.ADMIN_KEY) {
       return res.status(403).send("Forbidden");
+    }
 
     const { command, args = [], userId } = req.body;
 
@@ -158,7 +159,7 @@ app.post("/run-command", async (req, res) => {
   }
 });
 
-// ✅ SUBMIT SCORE (ELO SYSTEM)
+// ✅ SUBMIT SCORE
 app.post("/submit-score", (req, res) => {
   const { userId, score } = req.body;
 
@@ -170,9 +171,11 @@ app.post("/submit-score", (req, res) => {
   res.send("Score updated");
 });
 
-// ================== START SERVER ==================
+// ================== START ==================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Server running on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🌐 Server running on ${PORT}`);
+});
 
 // ================== LOGIN ==================
 client.login(process.env.TOKEN);
