@@ -28,6 +28,7 @@ const GUILD_ID = "1488203882130837704";
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+// ===== TEMP =====
 const TEMP_DIR = path.join(process.cwd(), "temp");
 await fs.mkdir(TEMP_DIR, { recursive: true });
 
@@ -42,7 +43,7 @@ const client = new Client({
   partials: [Partials.Channel]
 });
 
-// ===== DATABASE =====
+// ===== DB =====
 await mongoose.connect(process.env.MONGO_URL);
 console.log("✅ DB Connected");
 
@@ -55,15 +56,7 @@ const userSchema = new mongoose.Schema({
   coins: { type: Number, default: 1000 }
 });
 
-const settingsSchema = new mongoose.Schema({
-  guildId: String,
-  gambling: { default: true, type: Boolean },
-  fun: { default: true, type: Boolean },
-  moderation: { default: true, type: Boolean }
-});
-
 const User = mongoose.model("User", userSchema);
-const Settings = mongoose.model("Settings", settingsSchema);
 
 // ===== RANK SYSTEM =====
 const RANKS = [
@@ -86,48 +79,64 @@ async function updateRank(member, elo) {
   let role = member.guild.roles.cache.find(r => r.name === rank.name);
   if (!role) role = await member.guild.roles.create({ name: rank.name });
 
-  const rolesToRemove = member.roles.cache.filter(r =>
+  const toRemove = member.roles.cache.filter(r =>
     RANKS.map(x => x.name).includes(r.name) && r.name !== rank.name
   );
 
-  await member.roles.remove(rolesToRemove).catch(() => {});
+  await member.roles.remove(toRemove).catch(() => {});
   await member.roles.add(role).catch(() => {});
 }
 
 // ===== READY =====
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`🔥 ${client.user.tag} ONLINE`);
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
+  // ✅ FIXED COMMANDS (NO CRASH)
   await rest.put(
     Routes.applicationGuildCommands(client.user.id, GUILD_ID),
     {
       body: [
-        { name: "profile", description: "View profile" },
+        {
+          name: "profile",
+          description: "View your profile"
+        },
+        {
+          name: "submit",
+          description: "Submit a clip"
+        },
         {
           name: "quality_method",
-          description: "Enhance video",
-          options: [{ name: "url", type: 3, required: true }]
-        },
-        { name: "submit", description: "Submit clip" }
+          description: "Enhance a video",
+          options: [
+            {
+              name: "url",
+              description: "Video URL to enhance",
+              type: 3,
+              required: true
+            }
+          ]
+        }
       ]
     }
   );
+
+  console.log("✅ Slash commands synced");
 });
 
-// ===== JOIN AUTO RANK =====
+// ===== AUTO JOIN =====
 client.on("guildMemberAdd", async member => {
   await User.findOneAndUpdate(
     { userId: member.id },
-    { elo: 1000, username: member.user.username },
+    { username: member.user.username, elo: 1000 },
     { upsert: true }
   );
 
   await updateRank(member, 1000);
 });
 
-// ===== MESSAGE COMMANDS (50+) =====
+// ===== PREFIX COMMANDS =====
 client.on("messageCreate", async msg => {
   if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
 
@@ -135,34 +144,30 @@ client.on("messageCreate", async msg => {
   const cmd = args.shift().toLowerCase();
 
   let user = await User.findOne({ userId: msg.author.id });
-  if (!user)
+  if (!user) {
     user = await User.create({
       userId: msg.author.id,
       username: msg.author.username
     });
+  }
 
-  // ===== BASIC =====
   if (cmd === "profile") {
     const rank = getRank(user.elo);
-    return msg.reply(`ELO: ${user.elo} | Rank: ${rank.name}`);
+    return msg.reply(`🏆 ${rank.name} | ELO: ${user.elo}`);
   }
 
   if (cmd === "leaderboard") {
     const top = await User.find().sort({ elo: -1 }).limit(10);
-    return msg.reply(top.map((u,i)=>`${i+1}. ${u.username} ${u.elo}`).join("\n"));
+    return msg.reply(
+      top.map((u, i) => `${i + 1}. ${u.username} - ${u.elo}`).join("\n")
+    );
   }
 
-  // ===== GAMBLE =====
-  if (["gamble","coinflip","slots","bet","dice"].includes(cmd)) {
+  if (["gamble","coinflip","slots"].includes(cmd)) {
     const win = Math.random() > 0.5;
     user.coins += win ? 100 : -100;
     await user.save();
-    return msg.reply(win ? "🎉 Win" : "💀 Lose");
-  }
-
-  // ===== FUN =====
-  if (["joke","meme","8ball","roast"].includes(cmd)) {
-    return msg.reply(`😂 ${cmd} executed`);
+    return msg.reply(win ? "🎉 You won!" : "💀 You lost!");
   }
 });
 
@@ -184,7 +189,7 @@ client.on("interactionCreate", async i => {
         new ActionRowBuilder().addComponents(
           new TextInputBuilder()
             .setCustomId("url")
-            .setLabel("URL")
+            .setLabel("Clip URL")
             .setStyle(TextInputStyle.Short)
         )
       );
@@ -213,33 +218,36 @@ client.on("interactionCreate", async i => {
         });
 
         await i.editReply({ files: [output] });
+
+        await fs.unlink(input).catch(() => {});
+        await fs.unlink(output).catch(() => {});
       } catch {
-        await i.editReply("❌ Failed");
+        await i.editReply("❌ Processing failed");
       }
     }
   }
 
-  // ===== MODAL SUBMIT =====
+  // ===== MODAL =====
   if (i.isModalSubmit()) {
     const url = i.fields.getTextInputValue("url");
 
     const row = new ActionRowBuilder().addComponents(
       Array.from({ length: 10 }, (_, x) =>
         new ButtonBuilder()
-          .setCustomId(`rate_${x+1}_${i.user.id}`)
-          .setLabel(`${x+1}`)
+          .setCustomId(`rate_${x + 1}_${i.user.id}`)
+          .setLabel(`${x + 1}`)
           .setStyle(ButtonStyle.Primary)
       )
     );
 
-    const ch = await client.channels.fetch(process.env.REVIEW_CHANNEL_ID);
+    const channel = await client.channels.fetch(process.env.REVIEW_CHANNEL_ID);
 
-    await ch.send({
+    await channel.send({
       content: `Submission from <@${i.user.id}>\n${url}`,
       components: [row]
     });
 
-    return i.reply({ content: "Submitted", ephemeral: true });
+    return i.reply({ content: "✅ Submitted", ephemeral: true });
   }
 
   // ===== BUTTON =====
@@ -255,42 +263,43 @@ client.on("interactionCreate", async i => {
     const member = await i.guild.members.fetch(userId);
     await updateRank(member, user.elo);
 
-    return i.update({ content: `+${score*10} ELO`, components: [] });
+    return i.update({
+      content: `+${score * 10} ELO`,
+      components: []
+    });
   }
 });
 
-// ===== DASHBOARD API =====
+// ===== DASHBOARD =====
 const app = express();
 app.use(express.json());
 
-app.get("/dashboard", async (req,res)=>{
-  const users = await User.find().sort({ elo:-1 }).limit(10);
+app.get("/", (_, res) => res.send("Bot running"));
+
+app.get("/dashboard", async (req, res) => {
+  const users = await User.find().sort({ elo: -1 }).limit(10);
   res.json(users);
 });
 
-app.post("/run-command", async (req,res)=>{
-  if(req.headers.key !== process.env.ADMIN_KEY)
+app.post("/run-command", async (req, res) => {
+  if (req.headers.key !== process.env.ADMIN_KEY)
     return res.sendStatus(403);
 
-  const { command } = req.body;
-
   const guild = client.guilds.cache.get(GUILD_ID);
-  const channel = guild.channels.cache.find(c=>c.isTextBased());
+  const channel = guild.channels.cache.find(c => c.isTextBased());
 
   client.emit("messageCreate", {
-    content: `${PREFIX}${command}`,
-    author: { bot:false },
+    content: `${PREFIX}${req.body.command}`,
+    author: { bot: false },
     guild,
     channel,
-    reply: (m)=>channel.send(m)
+    reply: (m) => channel.send(`📊 ${m}`)
   });
 
   res.send("OK");
 });
 
-app.post("/toggle", async (req,res)=>{
-  res.json({ ok:true });
-});
-
 app.listen(process.env.PORT || 3000);
+
+// ===== LOGIN =====
 client.login(process.env.DISCORD_TOKEN);
