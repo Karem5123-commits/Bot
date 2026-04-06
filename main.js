@@ -24,11 +24,28 @@ process.on('unhandledRejection', console.error);
 const app = express();
 app.use(express.json());
 app.use(cors());
+
+let requestCount = 0;
+const startTime = Date.now();
+
+app.use((req, res, next) => {
+  requestCount++;
+  const start = Date.now();
+
+  res.on("finish", () => {
+    const duration = Date.now() - start;
+    console.log(`🌐 ${req.method} ${req.url} | ${res.statusCode} | ${duration}ms | Total: ${requestCount}`);
+  });
+
+  next();
+});
+
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
 
 // ================= DATABASE =================
-await mongoose.connect(process.env.MONGO_URI);
-console.log("✅ Mongo Connected");
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("✅ Mongo Connected"))
+  .catch(err => console.error(err));
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
@@ -79,8 +96,8 @@ const PREFIX = "!";
 const OWNERS = ["1347959266539081768","1399094217846030346"];
 
 // ================= READY =================
-client.once("ready", async () => {
-  console.log(`✅ ${client.user.tag}`);
+client.once("clientReady", async () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
 
   const cmds = [
     new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
@@ -94,6 +111,8 @@ client.once("ready", async () => {
     Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
     { body: cmds }
   );
+
+  console.log("⚡ Slash commands loaded");
 });
 
 // ================= MESSAGE COMMANDS =================
@@ -113,26 +132,28 @@ client.on("messageCreate", async msg => {
     user.premiumCode = code;
     await user.save();
     await msg.author.send(`🔑 Code: ${code}`);
-    return msg.reply("Sent to DM");
+    return msg.reply("📩 Sent to DM");
   }
 
-  // QUALITY
+  // QUALITY (BOOST / CODE LOCK)
   if (cmd === "quality") {
-    if (!user.premiumCode) return msg.reply("❌ Premium only");
+    if (!user.premiumCode) return msg.reply("❌ Premium only (boost required)");
     return msg.reply("🚀 6K QUALITY ENABLED");
   }
 
-  // GAMBLING (15+)
+  // GAMBLING
   if (cmd === "balance") return msg.reply(`💰 ${user.balance}`);
-  if (cmd === "daily") { user.balance+=500; await user.save(); return msg.reply("+500"); }
+  if (cmd === "daily") { user.balance+=500; await user.save(); return msg.reply("+500 coins"); }
 
   const gamble = (amt)=>Math.random()>0.5?(user.balance+=amt):(user.balance-=amt);
 
-  if (["coinflip","bet","slots","roulette","blackjack","crash","double","triple","risk","jackpot"].includes(cmd)){
-    gamble(200); await user.save(); return msg.reply("🎰 Done");
+  if (["coinflip","bet","slots","roulette","blackjack","crash","double","triple","risk","jackpot","flip","dice","spin","highlow","allin"].includes(cmd)){
+    gamble(200);
+    await user.save();
+    return msg.reply(`🎰 New balance: ${user.balance}`);
   }
 
-  // MOD (20+)
+  // MOD COMMANDS (20+)
   if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return;
 
   const m = msg.mentions.members.first();
@@ -141,6 +162,7 @@ client.on("messageCreate", async msg => {
   if (cmd==="ban"&&m) await m.ban();
   if (cmd==="mute"&&m) await m.timeout(600000);
   if (cmd==="unmute"&&m) await m.timeout(null);
+  if (cmd==="warn"&&m) msg.reply(`${m.user.tag} warned`);
   if (cmd==="clear") await msg.channel.bulkDelete(parseInt(args[0])||10);
   if (cmd==="lock") await msg.channel.permissionOverwrites.edit(msg.guild.id,{SendMessages:false});
   if (cmd==="unlock") await msg.channel.permissionOverwrites.edit(msg.guild.id,{SendMessages:true});
@@ -180,11 +202,11 @@ client.on("interactionCreate", async i => {
         if (!sub) return i.reply("No submissions");
 
         const buttons = [];
-        for (let i=1;i<=10;i++){
+        for (let x=1;x<=10;x++){
           buttons.push(
             new ButtonBuilder()
-              .setCustomId(`rate_${sub.id}_${i}`)
-              .setLabel(`${i}`)
+              .setCustomId(`rate_${sub.id}_${x}`)
+              .setLabel(`${x}`)
               .setStyle(ButtonStyle.Primary)
           );
         }
@@ -241,7 +263,13 @@ client.on("interactionCreate", async i => {
 });
 
 // ================= API =================
-app.get('/api/status', (_,res)=>res.json({online:client.isReady()}));
+app.get('/api/status', (_,res)=>{
+  res.json({
+    online: client.isReady(),
+    uptime: Math.floor((Date.now()-startTime)/1000),
+    requests: requestCount
+  });
+});
 
 app.get('/api/dashboard', async (_,res)=>{
   const users=await User.countDocuments();
@@ -263,5 +291,10 @@ app.get('/api/submissions', async (_,res)=>{
 app.get('/api/season', (_,res)=>res.json({season:1,daysLeft:30}));
 
 // ================= START =================
-app.listen(process.env.PORT||3000);
-client.login(process.env.DISCORD_TOKEN);
+app.listen(process.env.PORT||3000, () => {
+  console.log("🌐 API STARTED SUCCESSFULLY");
+});
+
+client.login(process.env.DISCORD_TOKEN)
+  .then(()=>console.log("✅ Discord Connected"))
+  .catch(console.error);
