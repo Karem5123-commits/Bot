@@ -20,9 +20,10 @@ process.on('unhandledRejection', console.error);
 // ================= EXPRESS =================
 const app = express();
 app.use(express.json());
-app.use(cors()); // ✅ FIXED CORS
+app.use(cors());
 
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
+app.get('/api/test', (_, res) => res.json({ message: "API working" }));
 
 // ================= DATABASE =================
 mongoose.connect(process.env.MONGO_URI)
@@ -233,12 +234,12 @@ client.on("interactionCreate", async i => {
 // STATUS
 app.get('/api/status', (req, res) => {
   res.json({
-    online: client.isReady(),
-    tag: client.user ? client.user.tag : null
+    online: client?.isReady?.() || false,
+    tag: client?.user?.tag || null
   });
 });
 
-// ✅ DASHBOARD (CRITICAL FIX)
+// DASHBOARD
 app.get('/api/dashboard', async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -251,13 +252,12 @@ app.get('/api/dashboard', async (req, res) => {
     res.json({
       users: totalUsers,
       submissions: totalSubs,
-      stats: {
-        totalProcessed: processed
-      }
+      stats: { totalProcessed: processed }
     });
 
   } catch (e) {
-    res.status(500).json({ error: "Dashboard failed" });
+    console.error(e);
+    res.json({ users: 0, submissions: 0, stats: { totalProcessed: 0 } });
   }
 });
 
@@ -273,7 +273,19 @@ app.get('/api/leaderboard', async (req, res) => {
       rank: getRank(u.mmr)
     })));
   } catch (e) {
-    res.status(500).json({ error: "Failed" });
+    console.error(e);
+    res.json([]);
+  }
+});
+
+// SUBMISSIONS (🔥 FIXED)
+app.get('/api/submissions', async (req, res) => {
+  try {
+    const subs = await Submission.find({ status: "pending" });
+    res.json(subs || []);
+  } catch (e) {
+    console.error(e);
+    res.json([]);
   }
 });
 
@@ -282,6 +294,7 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`🌐 API running on port ${PORT}`);
+  console.log("✅ Routes loaded");
 });
 
 console.log("🚀 Starting bot...");
