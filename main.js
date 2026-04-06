@@ -9,6 +9,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import express from 'express';
 import crypto from 'crypto';
+import cors from 'cors';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ process.on('unhandledRejection', console.error);
 // ================= EXPRESS =================
 const app = express();
 app.use(express.json());
+app.use(cors()); // ✅ FIXED CORS
 
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
 
@@ -236,6 +238,29 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// ✅ DASHBOARD (CRITICAL FIX)
+app.get('/api/dashboard', async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const totalSubs = await Submission.countDocuments();
+
+    const processed = await Submission.countDocuments({
+      status: { $in: ["accepted", "rejected"] }
+    });
+
+    res.json({
+      users: totalUsers,
+      submissions: totalSubs,
+      stats: {
+        totalProcessed: processed
+      }
+    });
+
+  } catch (e) {
+    res.status(500).json({ error: "Dashboard failed" });
+  }
+});
+
 // LEADERBOARD
 app.get('/api/leaderboard', async (req, res) => {
   try {
@@ -252,28 +277,11 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
-// USER
-app.get('/api/user/:id', async (req, res) => {
-  const user = await User.findOne({ userId: req.params.id });
-  if (!user) return res.status(404).json({ error: "Not found" });
-
-  res.json({
-    ...user.toObject(),
-    rank: getRank(user.mmr)
-  });
-});
-
-// SUBMISSIONS
-app.get('/api/submissions', async (req, res) => {
-  const subs = await Submission.find({ status: "pending" });
-  res.json(subs);
-});
-
 // ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`🌐 Dashboard running on port ${PORT}`);
+  console.log(`🌐 API running on port ${PORT}`);
 });
 
 console.log("🚀 Starting bot...");
