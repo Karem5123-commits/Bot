@@ -1,7 +1,7 @@
 import {
-  Client, SlashCommandBuilder, REST, Routes,
-  EmbedBuilder, ModalBuilder, TextInputBuilder,
-  TextInputStyle, ActionRowBuilder
+  Client, GatewayIntentBits, SlashCommandBuilder,
+  REST, Routes, ModalBuilder, TextInputBuilder,
+  TextInputStyle, ActionRowBuilder, EmbedBuilder
 } from 'discord.js';
 
 import mongoose from 'mongoose';
@@ -18,9 +18,15 @@ import fs from 'fs';
 dotenv.config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// ================= SAFE START =================
-process.on('uncaughtException', err => console.error("Uncaught:", err));
-process.on('unhandledRejection', err => console.error("Unhandled:", err));
+// ================= CONFIG =================
+const OWNERS = [
+  "1347959266539081768",
+  "1399094217846030346"
+];
+
+// ================= SAFE =================
+process.on('uncaughtException', console.error);
+process.on('unhandledRejection', console.error);
 
 // ================= EXPRESS =================
 const app = express();
@@ -28,20 +34,16 @@ app.use(express.json());
 app.use(cors());
 
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
-app.get('/api/test', (_, res) => res.json({ ok: true }));
 
 // ================= DATABASE =================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ Mongo Connected"))
-  .catch(err => console.error("Mongo Error:", err));
+mongoose.connect(process.env.MONGO_URI);
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
   mmr: { type: Number, default: 1000 },
-  rank: { type: String, default: "Bronze" },
-  submissions: { type: Number, default: 0 }
+  coins: { type: Number, default: 1000 }
 }));
 
 const Submission = mongoose.model("Submission", new mongoose.Schema({
@@ -58,97 +60,70 @@ const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
   used: { type: Boolean, default: false }
 }));
 
+// ================= RANK =================
+function getRank(mmr) {
+  if (mmr >= 1800) return "Grandmaster";
+  if (mmr >= 1600) return "Master";
+  if (mmr >= 1400) return "Diamond";
+  if (mmr >= 1200) return "Platinum";
+  if (mmr >= 1000) return "Gold";
+  if (mmr >= 800) return "Silver";
+  return "Bronze";
+}
+
 // ================= VIDEO PROCESS =================
 async function processVideo(sub) {
-  const input = `./input_${sub.id}.mp4`;
-  const output = `./output_${sub.id}.mp4`;
+  const input = `./in_${sub.id}.mp4`;
+  const output = `./out_${sub.id}.mp4`;
 
   try {
-    console.log("⬇️ Downloading video...");
+    await ytdlp(sub.link, { output: input });
 
-    await ytdlp(sub.link, {
-      output: input,
-      format: 'mp4'
-    });
-
-    console.log("⚙️ Processing video...");
-
-    await new Promise((resolve, reject) => {
+    await new Promise((res, rej) => {
       ffmpeg(input)
         .videoFilters([
           "scale=3840:2160:flags=lanczos",
           "unsharp=5:5:1.0"
         ])
-        .on('end', resolve)
-        .on('error', reject)
+        .on("end", res)
+        .on("error", rej)
         .save(output);
     });
 
-    if (fs.existsSync(input)) fs.unlinkSync(input);
-
-    console.log("✅ Processing complete");
+    fs.existsSync(input) && fs.unlinkSync(input);
     return output;
 
-  } catch (err) {
-    console.error("❌ Processing failed:", err);
-
-    if (fs.existsSync(input)) fs.unlinkSync(input);
+  } catch {
+    fs.existsSync(input) && fs.unlinkSync(input);
     return null;
   }
 }
 
 // ================= DISCORD =================
-const client = new Client({ intents: 32767 });
+const client = new Client({
+  intents: Object.values(GatewayIntentBits)
+});
 
-// READY
+// ================= SLASH =================
 client.once("ready", async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`✅ ${client.user.tag}`);
 
   const cmds = [
-    new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
+    new SlashCommandBuilder().setName("submit").setDescription("Submit video"),
     new SlashCommandBuilder().setName("profile").setDescription("View profile")
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-  try {
-    await rest.put(
-      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-      { body: cmds }
-    );
-  } catch (e) {
-    console.error("Command register error:", e);
-  }
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: cmds }
+  );
 });
 
-// ================= BOOST DETECTION =================
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  try {
-    const role = newMember.guild.roles.premiumSubscriberRole;
-    if (!role) return;
-
-    const had = oldMember.roles.cache.has(role.id);
-    const has = newMember.roles.cache.has(role.id);
-
-    if (!had && has) {
-      const code = crypto.randomBytes(4).toString("hex").toUpperCase();
-
-      await PremiumCode.create({ userId: newMember.id, code });
-
-      await newMember.send(
-        `🔥 Thanks for boosting!\n\nYour code: **${code}**`
-      ).catch(() => {});
-    }
-
-  } catch (err) {
-    console.error("Boost error:", err);
-  }
-});
-
-// ================= COMMANDS =================
+// ================= SLASH HANDLER =================
 client.on("interactionCreate", async i => {
   try {
-
     if (i.isChatInputCommand()) {
 
       if (i.commandName === "submit") {
@@ -170,19 +145,12 @@ client.on("interactionCreate", async i => {
 
       if (i.commandName === "profile") {
         let user = await User.findOne({ userId: i.user.id });
+        if (!user) user = await User.create({ userId: i.user.id, username: i.user.tag });
 
-        if (!user) {
-          user = await User.create({
-            userId: i.user.id,
-            username: i.user.tag
-          });
-        }
-
-        return i.reply(`MMR: ${user.mmr} | Rank: ${user.rank}`);
+        return i.reply(`MMR: ${user.mmr} | Rank: ${getRank(user.mmr)}`);
       }
     }
 
-    // ================= SUBMIT =================
     if (i.isModalSubmit()) {
       const link = i.fields.getTextInputValue("link");
       const id = crypto.randomBytes(4).toString("hex");
@@ -194,108 +162,164 @@ client.on("interactionCreate", async i => {
         status: "processing"
       });
 
-      await User.updateOne(
-        { userId: i.user.id },
-        { $inc: { submissions: 1 }, username: i.user.tag },
-        { upsert: true }
-      );
-
-      processVideo(sub).then(async (file) => {
-        try {
-          if (!file) {
-            sub.status = "failed";
-          } else {
-            sub.status = "done";
-            sub.processedFile = file;
-          }
-          await sub.save();
-        } catch (e) {
-          console.error("Save error:", e);
-        }
+      processVideo(sub).then(async file => {
+        sub.status = file ? "done" : "failed";
+        sub.processedFile = file;
+        await sub.save();
       });
 
-      return i.reply({
-        content: "🚀 Processing started!",
-        ephemeral: true
-      });
+      return i.reply({ content: "🚀 Processing started!", ephemeral: true });
     }
 
-  } catch (err) {
-    console.error("Interaction error:", err);
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+// ================= PREFIX COMMANDS =================
+client.on("messageCreate", async msg => {
+  try {
+    if (!msg.content.startsWith("!") && !msg.content.startsWith("?")) return;
+    if (msg.author.bot) return;
+
+    const args = msg.content.slice(1).split(/ +/);
+    const cmd = args.shift().toLowerCase();
+
+    let user = await User.findOne({ userId: msg.author.id });
+    if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
+
+    // OWNER
+    if (msg.content.startsWith("?") && cmd === "code") {
+      if (!OWNERS.includes(msg.author.id)) return msg.reply("Owner only");
+      const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+      await PremiumCode.create({ userId: msg.author.id, code });
+      return msg.reply(`🔥 ${code}`);
+    }
+
+    // ECONOMY
+    if (cmd === "balance") return msg.reply(`💰 ${user.coins}`);
+    if (cmd === "daily") {
+      user.coins += 500;
+      await user.save();
+      return msg.reply("💰 +500");
+    }
+
+    // GAMBLING
+    if (cmd === "coinflip") {
+      const win = Math.random() > 0.5;
+      user.coins += win ? 100 : -100;
+      await user.save();
+      return msg.reply(win ? "Win" : "Lose");
+    }
+
+    if (cmd === "slots") {
+      const items = ["🍒","🍋","🍉"];
+      const s = () => items[Math.floor(Math.random()*3)];
+      return msg.reply(`${s()}|${s()}|${s()}`);
+    }
+
+    if (cmd === "bet") {
+      const amt = parseInt(args[0]) || 0;
+      if (user.coins < amt) return msg.reply("No coins");
+
+      const win = Math.random() > 0.5;
+      user.coins += win ? amt : -amt;
+      await user.save();
+
+      return msg.reply(win ? `+${amt}` : `-${amt}`);
+    }
+
+    // MOD
+    if (cmd === "kick") {
+      if (!msg.member.permissions.has("KickMembers")) return;
+      const u = msg.mentions.users.first();
+      if (!u) return;
+      await msg.guild.members.kick(u.id).catch(()=>{});
+      msg.reply("Kicked");
+    }
+
+    if (cmd === "ban") {
+      if (!msg.member.permissions.has("BanMembers")) return;
+      const u = msg.mentions.users.first();
+      if (!u) return;
+      await msg.guild.members.ban(u.id).catch(()=>{});
+      msg.reply("Banned");
+    }
+
+    // FUN (many)
+    if (cmd === "ping") msg.reply("Pong");
+    if (cmd === "8ball") {
+      const r = ["Yes","No","Maybe"];
+      msg.reply(r[Math.floor(Math.random()*3)]);
+    }
+
+    // RATING
+    if (cmd === "rate") {
+      if (!msg.member.permissions.has("ManageRoles")) return;
+
+      const score = parseInt(args[0]);
+      if (!score || score < 1 || score > 10) return;
+
+      const sub = await Submission.findOne({ status: "processing" });
+      if (!sub) return msg.reply("No submissions");
+
+      const target = await User.findOne({ userId: sub.userId });
+
+      const mmrMap = {
+        1:100,2:200,3:300,4:500,5:700,
+        6:900,7:1100,8:1300,9:1400,10:1500
+      };
+
+      target.mmr += mmrMap[score];
+      await target.save();
+
+      sub.status = "done";
+      await sub.save();
+
+      msg.reply(`Rated ${score}`);
+    }
+
+  } catch (e) {
+    console.error(e);
   }
 });
 
 // ================= API =================
-
-// STATUS
-app.get('/api/status', (req, res) => {
-  res.json({
-    online: client?.isReady?.() || false,
-    tag: client?.user?.tag || null
-  });
+app.get('/api/status', (_, res) => {
+  res.json({ online: client.isReady() });
 });
 
-// DASHBOARD
 app.get('/api/dashboard', async (_, res) => {
-  try {
-    const users = await User.countDocuments();
-    const subs = await Submission.countDocuments();
-    const processed = await Submission.countDocuments({ status: "done" });
+  const users = await User.countDocuments();
+  const subs = await Submission.countDocuments();
+  const processed = await Submission.countDocuments({ status: "done" });
 
-    res.json({
-      users,
-      submissions: subs,
-      stats: { totalProcessed: processed }
-    });
-
-  } catch {
-    res.json({ users: 0, submissions: 0, stats: { totalProcessed: 0 } });
-  }
+  res.json({ users, submissions: subs, stats: { totalProcessed: processed } });
 });
 
-// LEADERBOARD
 app.get('/api/leaderboard', async (_, res) => {
-  try {
-    const users = await User.find().sort({ mmr: -1 }).limit(50);
-    res.json(users);
-  } catch {
-    res.json([]);
-  }
+  const users = await User.find().sort({ mmr: -1 }).limit(50);
+  res.json(users);
 });
 
-// SUBMISSIONS (FIXED)
 app.get('/api/submissions', async (_, res) => {
-  try {
-    const subs = await Submission.find().sort({ _id: -1 }).limit(20);
-    res.json(subs);
-  } catch {
-    res.json([]);
-  }
+  const subs = await Submission.find().sort({ _id: -1 }).limit(20);
+  res.json(subs);
 });
 
-// REDEEM
 app.post('/api/redeem', async (req, res) => {
-  try {
-    const { code } = req.body;
+  const { code } = req.body;
+  const found = await PremiumCode.findOne({ code, used: false });
 
-    const found = await PremiumCode.findOne({ code, used: false });
-    if (!found) return res.json({ success: false });
+  if (!found) return res.json({ success: false });
 
-    found.used = true;
-    await found.save();
+  found.used = true;
+  await found.save();
 
-    res.json({ success: true });
-
-  } catch {
-    res.json({ success: false });
-  }
+  res.json({ success: true });
 });
 
 // ================= START =================
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`🌐 API running on port ${PORT}`);
-});
+app.listen(process.env.PORT || 3000, () => console.log("🌐 API running"));
 
 client.login(process.env.DISCORD_TOKEN);
