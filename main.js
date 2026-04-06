@@ -1,331 +1,217 @@
 import {
-  Client, GatewayIntentBits, Partials,
-  REST, Routes,
-  SlashCommandBuilder,
-  ActivityType,
-  PermissionsBitField
+  Client,
+  GatewayIntentBits,
+  Partials,
+  PermissionsBitField,
+  EmbedBuilder,
+  ActivityType
 } from "discord.js";
 
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import express from "express";
-import cors from "cors";
-import http from "http";
-import { Server } from "socket.io";
+import crypto from "crypto";
+import fs from "fs/promises";
+import path from "path";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegPath from "ffmpeg-static";
+import ffprobePath from "ffprobe-static";
+import ytdl from "yt-dlp-exec";
 
 dotenv.config();
 
-// ================= SAFE =================
-process.on("uncaughtException", e => console.error("💥", e));
-process.on("unhandledRejection", e => console.error("💥", e));
+ffmpeg.setFfmpegPath(ffmpegPath);
+ffmpeg.setFfprobePath(ffprobePath.path);
 
 // ================= CONFIG =================
 const PREFIX = "!";
+const TEMP_DIR = "./temp";
+
 const CONFIG = {
-  STAFF: PermissionsBitField.Flags.ManageGuild,
-  SPAM_LIMIT: 5,
-  SPAM_TIME: 10000
+  MAX_MB: 24,
+  MAX_DURATION: 90,
+  STAFF: PermissionsBitField.Flags.ManageGuild
 };
+
+// ================= FAIL SAFE =================
+process.on("uncaughtException", e => console.log("💥", e));
+process.on("unhandledRejection", e => console.log("💥", e));
 
 // ================= DB =================
 await mongoose.connect(process.env.MONGO_URI);
 
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
+  username: String,
   mmr: { type: Number, default: 1000 },
-  rank: { type: String, default: "Bronze" },
-  balance: { type: Number, default: 1000 }
+  warnings: { type: Number, default: 0 }
 }));
 
-const Settings = mongoose.model("Settings", new mongoose.Schema({
-  key: String,
-  value: mongoose.Schema.Types.Mixed
-}));
-
-// ================= RANKS =================
-const RANKS = [
-  { name: "Bronze", mmr: 0 },
-  { name: "Silver", mmr: 800 },
-  { name: "Gold", mmr: 1000 },
-  { name: "Platinum", mmr: 1300 },
-  { name: "Diamond", mmr: 1600 },
-  { name: "Master", mmr: 2000 }
-];
-
-function getRank(mmr) {
-  let r = RANKS[0];
-  for (const rank of RANKS) if (mmr >= rank.mmr) r = rank;
-  return r.name;
-}
-
-// ================= DISCORD =================
+// ================= BOT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ],
-  partials: [Partials.GuildMember]
+  partials: [Partials.Channel]
 });
 
-// ================= COMMAND TOGGLE =================
-async function isEnabled(cmd) {
-  const s = await Settings.findOne({ key: cmd });
-  return s?.value !== false;
+// ================= HELPERS =================
+const active = new Set();
+
+function uid() {
+  return crypto.randomBytes(6).toString("hex");
 }
 
-async function setEnabled(cmd, val) {
-  await Settings.updateOne({ key: cmd }, { value: val }, { upsert: true });
+async function safeUnlink(f) {
+  await fs.unlink(f).catch(()=>{});
 }
 
-// ================= AUTO ROLE =================
-async function applyRankRole(member, mmr) {
-  const rank = getRank(mmr);
-  let role = member.guild.roles.cache.find(r => r.name === rank);
-
-  if (!role) {
-    role = await member.guild.roles.create({ name: rank }).catch(()=>null);
-  }
-
-  if (!role) return;
-
-  const all = RANKS.map(r=>r.name);
-  const remove = member.roles.cache.filter(r=>all.includes(r.name));
-
-  await member.roles.remove(remove).catch(()=>{});
-  await member.roles.add(role).catch(()=>{});
-}
-
-// ================= QUEUE =================
-const queue = [];
-let processing = false;
-
-async function processQueue(io) {
-  if (processing || queue.length === 0) return;
-  processing = true;
-
-  const job = queue.shift();
-
-  try {
-    await job.reply("⚙️ Processing...");
-    await new Promise(r => setTimeout(r, 4000));
-
-    await job.reply("✅ Done");
-
-    await User.updateOne(
-      { userId: job.userId },
-      { $inc: { balance: 10 } },
-      { upsert: true }
-    );
-
-    io.emit("update");
-
-  } catch {
-    job.reply("❌ Failed");
-  }
-
-  processing = false;
-  processQueue(io);
-}
-
-// ================= ANTI SPAM =================
-const spamMap = new Map();
-
-function checkSpam(id) {
-  const now = Date.now();
-  if (!spamMap.has(id)) spamMap.set(id, []);
-  const arr = spamMap.get(id).filter(t => now - t < CONFIG.SPAM_TIME);
-  arr.push(now);
-  spamMap.set(id, arr);
-  return arr.length > CONFIG.SPAM_LIMIT;
-}
-
-// ================= EXPRESS =================
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
-// ================= ADMIN API =================
-app.get("/api/admin/commands", async (_,res)=>{
-  const all = ["quality","profile","leaderboard","gamble"];
-  const data = {};
-  for (const c of all) data[c] = await isEnabled(c);
-  res.json(data);
-});
-
-app.post("/api/admin/toggle", async (req,res)=>{
-  const { command, enabled } = req.body;
-  await setEnabled(command, enabled);
-  io.emit("update");
-  res.json({ success:true });
-});
-
-// ================= PUBLIC API =================
-app.get("/api/status", (_,res)=>{
-  res.json({ online:true, queue:queue.length });
-});
-
-app.get("/api/leaderboard", async (_,res)=>{
-  res.json(await User.find().sort({ mmr:-1 }).limit(50));
-});
-
-app.get("/api/dashboard", async (_,res)=>{
-  res.json({
-    users: await User.countDocuments(),
-    queue: queue.length
+async function getInfo(file) {
+  return new Promise((res, rej) => {
+    ffmpeg.ffprobe(file, (e, d) => {
+      if (e) return rej(e);
+      res({
+        duration: d.format.duration || 0,
+        size: d.format.size / 1024 / 1024
+      });
+    });
   });
-});
+}
+
+async function processVideo(input, output) {
+  return new Promise((res, rej) => {
+    ffmpeg(input)
+      .videoFilters([
+        "scale=1920:1080",
+        "minterpolate=fps=60"
+      ])
+      .outputOptions(["-crf 18"])
+      .save(output)
+      .on("end", res)
+      .on("error", rej);
+  });
+}
 
 // ================= READY =================
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log("🚀 FULL POWER READY");
-
-  client.user.setActivity("Ultra AI Engine", {
-    type: ActivityType.Playing
-  });
-
-  const cmds = [
-    new SlashCommandBuilder().setName("quality").setDescription("Enhance").addStringOption(o=>o.setName("url").setRequired(true)),
-    new SlashCommandBuilder().setName("profile").setDescription("Profile"),
-    new SlashCommandBuilder().setName("leaderboard").setDescription("Top"),
-    new SlashCommandBuilder().setName("gamble").setDescription("Bet").addIntegerOption(o=>o.setName("amount").setRequired(true)),
-    new SlashCommandBuilder().setName("enable").setDescription("Enable command").addStringOption(o=>o.setName("cmd").setRequired(true)),
-    new SlashCommandBuilder().setName("disable").setDescription("Disable command").addStringOption(o=>o.setName("cmd").setRequired(true))
-  ].map(c=>c.toJSON());
-
-  const rest = new REST({ version:"10" }).setToken(process.env.DISCORD_TOKEN);
-  await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body:cmds });
+  await fs.mkdir(TEMP_DIR, { recursive: true });
+  client.user.setActivity("Ultra AI Engine", { type: ActivityType.Playing });
 });
 
-// ================= INTERACTIONS =================
-client.on("interactionCreate", async i => {
-  try {
-    if (!i.isChatInputCommand()) return;
-
-    if (!(await isEnabled(i.commandName))) {
-      return i.reply({ content:"Command disabled", ephemeral:true });
-    }
-
-    if (checkSpam(i.user.id)) {
-      return i.reply({ content:"Slow down", ephemeral:true });
-    }
-
-    let user = await User.findOne({ userId:i.user.id });
-    if (!user) user = await User.create({ userId:i.user.id });
-
-    if (i.commandName === "quality") {
-      await i.reply("⏳ Queued");
-      queue.push({ reply: (m)=>i.followUp(m), userId:i.user.id });
-      processQueue(io);
-    }
-
-    if (i.commandName === "profile") {
-      return i.reply(`Rank: ${user.rank} | Balance: ${user.balance}`);
-    }
-
-    if (i.commandName === "leaderboard") {
-      const top = await User.find().sort({ mmr:-1 }).limit(10);
-      return i.reply(top.map((u,i)=>`${i+1}. <@${u.userId}>`).join("\n"));
-    }
-
-    if (i.commandName === "gamble") {
-      const amt = i.options.getInteger("amount");
-
-      if (amt > user.balance) return i.reply("Not enough");
-
-      if (Math.random() > 0.5) {
-        user.balance += amt;
-      } else {
-        user.balance -= amt;
-      }
-
-      await user.save();
-      return i.reply(`Balance: ${user.balance}`);
-    }
-
-    if (i.commandName === "enable" || i.commandName === "disable") {
-      if (!i.member.permissions.has(CONFIG.STAFF)) {
-        return i.reply({ content:"Admin only", ephemeral:true });
-      }
-
-      const cmd = i.options.getString("cmd");
-      await setEnabled(cmd, i.commandName === "enable");
-      return i.reply(`✅ ${cmd} updated`);
-    }
-
-    const member = await i.guild.members.fetch(i.user.id);
-    await applyRankRole(member, user.mmr);
-
-  } catch (e) {
-    console.error(e);
-    if (!i.replied) i.reply("Error");
-  }
-});
-
-// ================= PREFIX COMMANDS =================
+// ================= COMMANDS =================
 client.on("messageCreate", async msg => {
-  try {
-    if (msg.author.bot) return;
-    if (!msg.content.startsWith(PREFIX)) return;
+  if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
 
-    const args = msg.content.slice(PREFIX.length).trim().split(/ +/);
-    const cmd = args.shift().toLowerCase();
+  const args = msg.content.slice(PREFIX.length).trim().split(" ");
+  const cmd = args.shift().toLowerCase();
 
-    if (!(await isEnabled(cmd))) return msg.reply("Command disabled");
-    if (checkSpam(msg.author.id)) return msg.reply("Slow down");
+  // ================= ENHANCE =================
+  if (cmd === "enhance") {
+    const url = args[0];
+    if (!url) return msg.reply("Give URL");
 
+    if (active.has(msg.author.id)) return msg.reply("Already processing");
+    active.add(msg.author.id);
+
+    const id = uid();
+    const input = path.join(TEMP_DIR, `in_${id}.mp4`);
+    const output = path.join(TEMP_DIR, `out_${id}.mp4`);
+
+    try {
+      await msg.reply("📥 Downloading...");
+
+      await ytdl(url, {
+        output: input,
+        format: "mp4"
+      });
+
+      const info = await getInfo(input);
+      if (info.duration > CONFIG.MAX_DURATION) {
+        return msg.reply("Too long");
+      }
+
+      await msg.reply("⚙️ Enhancing...");
+      await processVideo(input, output);
+
+      await msg.reply({ files: [output] });
+
+      await User.updateOne(
+        { userId: msg.author.id },
+        { $inc: { mmr: 10 }, $setOnInsert: { username: msg.author.tag } },
+        { upsert: true }
+      );
+
+    } catch {
+      msg.reply("❌ Failed");
+    } finally {
+      active.delete(msg.author.id);
+      await safeUnlink(input);
+      await safeUnlink(output);
+    }
+  }
+
+  // ================= PROFILE =================
+  if (cmd === "profile") {
     let user = await User.findOne({ userId: msg.author.id });
     if (!user) user = await User.create({ userId: msg.author.id });
 
-    if (cmd === "quality") {
-      msg.reply("⏳ Queued");
-      queue.push({ reply: (m)=>msg.reply(m), userId: msg.author.id });
-      processQueue(io);
-    }
+    const embed = new EmbedBuilder()
+      .setTitle("Profile")
+      .setDescription(`MMR: ${user.mmr}\nWarnings: ${user.warnings}`);
 
-    if (cmd === "profile") {
-      return msg.reply(`Rank: ${user.rank} | Balance: ${user.balance}`);
-    }
+    msg.reply({ embeds: [embed] });
+  }
 
-    if (cmd === "leaderboard") {
-      const top = await User.find().sort({ mmr:-1 }).limit(10);
-      return msg.reply(top.map((u,i)=>`${i+1}. <@${u.userId}>`).join("\n"));
-    }
+  // ================= LEADERBOARD =================
+  if (cmd === "lb") {
+    const top = await User.find().sort({ mmr: -1 }).limit(10);
 
-    if (cmd === "gamble") {
-      const amt = parseInt(args[0]);
-      if (!amt) return msg.reply("Enter amount");
+    const text = top.map((u, i) =>
+      `${i + 1}. <@${u.userId}> - ${u.mmr}`
+    ).join("\n");
 
-      if (amt > user.balance) return msg.reply("Not enough");
+    msg.reply(text || "No data");
+  }
 
-      if (Math.random() > 0.5) user.balance += amt;
-      else user.balance -= amt;
+  // ================= WARN =================
+  if (cmd === "warn") {
+    if (!msg.member.permissions.has(CONFIG.STAFF)) return;
 
-      await user.save();
-      return msg.reply(`Balance: ${user.balance}`);
-    }
+    const user = msg.mentions.users.first();
+    if (!user) return msg.reply("Mention user");
 
-    if (cmd === "enable" || cmd === "disable") {
-      if (!msg.member.permissions.has(CONFIG.STAFF)) return msg.reply("Admin only");
+    await User.updateOne(
+      { userId: user.id },
+      { $inc: { warnings: 1 } },
+      { upsert: true }
+    );
 
-      const target = args[0];
-      await setEnabled(target, cmd === "enable");
-      return msg.reply(`✅ ${target} updated`);
-    }
-
-    const member = await msg.guild.members.fetch(msg.author.id);
-    await applyRankRole(member, user.mmr);
-
-  } catch (e) {
-    console.error(e);
-    msg.reply("Error");
+    msg.reply(`Warned ${user.tag}`);
   }
 });
 
-// ================= START =================
-server.listen(process.env.PORT || 3000);
+// ================= API =================
+const app = express();
+
+app.get("/", (_, res) => res.send("OK"));
+
+app.get("/api/status", (_, res) => {
+  res.json({
+    status: "online",
+    users: client.users.cache.size
+  });
+});
+
+app.get("/api/leaderboard", async (_, res) => {
+  const top = await User.find().sort({ mmr: -1 }).limit(10);
+  res.json(top);
+});
+
+app.listen(process.env.PORT || 3000);
+
+// ================= LOGIN =================
 client.login(process.env.DISCORD_TOKEN);
