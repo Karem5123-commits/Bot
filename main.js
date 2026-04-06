@@ -1,7 +1,8 @@
 import {
   Client, GatewayIntentBits, SlashCommandBuilder,
   REST, Routes, ModalBuilder, TextInputBuilder,
-  TextInputStyle, ActionRowBuilder, EmbedBuilder
+  TextInputStyle, ActionRowBuilder,
+  ButtonBuilder, ButtonStyle
 } from 'discord.js';
 
 import mongoose from 'mongoose';
@@ -18,32 +19,30 @@ import fs from 'fs';
 dotenv.config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// ================= CONFIG =================
-const OWNERS = [
-  "1347959266539081768",
-  "1399094217846030346"
-];
+// ===== CONFIG =====
+const OWNERS = ["1347959266539081768","1399094217846030346"];
 
-// ================= SAFE =================
+// ===== SAFE =====
 process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
-// ================= EXPRESS =================
+// ===== EXPRESS =====
 const app = express();
 app.use(express.json());
 app.use(cors());
 
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
 
-// ================= DATABASE =================
+// ===== DB =====
 mongoose.connect(process.env.MONGO_URI);
 
-// ================= MODELS =================
+// ===== MODELS =====
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
   mmr: { type: Number, default: 1000 },
-  coins: { type: Number, default: 1000 }
+  coins: { type: Number, default: 1000 },
+  submissions: { type: Number, default: 0 }
 }));
 
 const Submission = mongoose.model("Submission", new mongoose.Schema({
@@ -51,7 +50,8 @@ const Submission = mongoose.model("Submission", new mongoose.Schema({
   userId: String,
   link: String,
   status: { type: String, default: "pending" },
-  processedFile: String
+  processedFile: String,
+  progress: { type: Number, default: 0 }
 }));
 
 const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
@@ -60,7 +60,7 @@ const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
   used: { type: Boolean, default: false }
 }));
 
-// ================= RANK =================
+// ===== RANK =====
 function getRank(mmr) {
   if (mmr >= 1800) return "Grandmaster";
   if (mmr >= 1600) return "Master";
@@ -71,40 +71,64 @@ function getRank(mmr) {
   return "Bronze";
 }
 
-// ================= VIDEO PROCESS =================
+// ===== VIDEO =====
 async function processVideo(sub) {
   const input = `./in_${sub.id}.mp4`;
   const output = `./out_${sub.id}.mp4`;
 
   try {
+    sub.status = "downloading"; await sub.save();
+
     await ytdlp(sub.link, { output: input });
+
+    sub.status = "processing"; await sub.save();
 
     await new Promise((res, rej) => {
       ffmpeg(input)
-        .videoFilters([
-          "scale=3840:2160:flags=lanczos",
-          "unsharp=5:5:1.0"
-        ])
+        .videoFilters(["scale=3840:2160:flags=lanczos","unsharp=5:5:1.0"])
+        .on("progress", p => sub.progress = Math.floor(p.percent || 0))
         .on("end", res)
         .on("error", rej)
         .save(output);
     });
 
-    fs.existsSync(input) && fs.unlinkSync(input);
-    return output;
+    sub.status = "done";
+    sub.processedFile = output;
+    await sub.save();
 
-  } catch {
     fs.existsSync(input) && fs.unlinkSync(input);
-    return null;
+
+    // ===== DISCORD PANEL =====
+    const channel = await client.channels.fetch(process.env.REVIEW_CHANNEL);
+
+    const buttons = [];
+    for (let i = 1; i <= 10; i++) {
+      buttons.push(
+        new ButtonBuilder()
+          .setCustomId(`rate_${sub.id}_${i}`)
+          .setLabel(`${i}`)
+          .setStyle(ButtonStyle.Primary)
+      );
+    }
+
+    const row = new ActionRowBuilder().addComponents(buttons);
+
+    channel.send({
+      content: `🎬 Submission Ready\n${sub.link}`,
+      components: [row]
+    });
+
+  } catch (e) {
+    console.error(e);
+    sub.status = "failed";
+    await sub.save();
   }
 }
 
-// ================= DISCORD =================
-const client = new Client({
-  intents: Object.values(GatewayIntentBits)
-});
+// ===== DISCORD =====
+const client = new Client({ intents: Object.values(GatewayIntentBits) });
 
-// ================= SLASH =================
+// ===== SLASH =====
 client.once("ready", async () => {
   console.log(`✅ ${client.user.tag}`);
 
@@ -121,7 +145,7 @@ client.once("ready", async () => {
   );
 });
 
-// ================= SLASH HANDLER =================
+// ===== INTERACTIONS =====
 client.on("interactionCreate", async i => {
   try {
     if (i.isChatInputCommand()) {
@@ -147,7 +171,7 @@ client.on("interactionCreate", async i => {
         let user = await User.findOne({ userId: i.user.id });
         if (!user) user = await User.create({ userId: i.user.id, username: i.user.tag });
 
-        return i.reply(`MMR: ${user.mmr} | Rank: ${getRank(user.mmr)}`);
+        return i.reply(`MMR: ${user.mmr} | Rank: ${getRank(user.mmr)} | Coins: ${user.coins}`);
       }
     }
 
@@ -162,132 +186,123 @@ client.on("interactionCreate", async i => {
         status: "processing"
       });
 
-      processVideo(sub).then(async file => {
-        sub.status = file ? "done" : "failed";
-        sub.processedFile = file;
-        await sub.save();
-      });
+      await User.updateOne(
+        { userId: i.user.id },
+        { $inc: { submissions: 1 }, username: i.user.tag },
+        { upsert: true }
+      );
+
+      processVideo(sub);
 
       return i.reply({ content: "🚀 Processing started!", ephemeral: true });
     }
 
+    if (i.isButton()) {
+      const [type, subId, score] = i.customId.split("_");
+
+      if (type === "rate") {
+
+        if (!i.member.permissions.has("ManageRoles"))
+          return i.reply({ content: "Staff only", ephemeral: true });
+
+        const sub = await Submission.findOne({ id: subId });
+        if (!sub) return;
+
+        const user = await User.findOne({ userId: sub.userId });
+
+        const mmrMap = {
+          1:100,2:200,3:300,4:500,5:700,
+          6:900,7:1100,8:1300,9:1400,10:1500
+        };
+
+        const gain = mmrMap[score];
+        user.mmr += gain;
+
+        await user.save();
+
+        sub.status = "done";
+        await sub.save();
+
+        return i.update({
+          content: `✅ Rated ${score}/10 → +${gain} MMR`,
+          components: []
+        });
+      }
+    }
+
   } catch (e) {
     console.error(e);
   }
 });
 
-// ================= PREFIX COMMANDS =================
+// ===== PREFIX COMMANDS =====
 client.on("messageCreate", async msg => {
-  try {
-    if (!msg.content.startsWith("!") && !msg.content.startsWith("?")) return;
-    if (msg.author.bot) return;
+  if (!msg.content.startsWith("!") && !msg.content.startsWith("?")) return;
+  if (msg.author.bot) return;
 
-    const args = msg.content.slice(1).split(/ +/);
-    const cmd = args.shift().toLowerCase();
+  const args = msg.content.slice(1).split(/ +/);
+  const cmd = args.shift().toLowerCase();
 
-    let user = await User.findOne({ userId: msg.author.id });
-    if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
+  let user = await User.findOne({ userId: msg.author.id });
+  if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
 
-    // OWNER
-    if (msg.content.startsWith("?") && cmd === "code") {
-      if (!OWNERS.includes(msg.author.id)) return msg.reply("Owner only");
-      const code = crypto.randomBytes(4).toString("hex").toUpperCase();
-      await PremiumCode.create({ userId: msg.author.id, code });
-      return msg.reply(`🔥 ${code}`);
-    }
+  // OWNER CODE
+  if (msg.content.startsWith("?") && cmd === "code") {
+    if (!OWNERS.includes(msg.author.id)) return msg.reply("Owner only");
 
-    // ECONOMY
-    if (cmd === "balance") return msg.reply(`💰 ${user.coins}`);
-    if (cmd === "daily") {
-      user.coins += 500;
-      await user.save();
-      return msg.reply("💰 +500");
-    }
+    const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+    await PremiumCode.create({ userId: msg.author.id, code });
 
-    // GAMBLING
-    if (cmd === "coinflip") {
-      const win = Math.random() > 0.5;
-      user.coins += win ? 100 : -100;
-      await user.save();
-      return msg.reply(win ? "Win" : "Lose");
-    }
-
-    if (cmd === "slots") {
-      const items = ["🍒","🍋","🍉"];
-      const s = () => items[Math.floor(Math.random()*3)];
-      return msg.reply(`${s()}|${s()}|${s()}`);
-    }
-
-    if (cmd === "bet") {
-      const amt = parseInt(args[0]) || 0;
-      if (user.coins < amt) return msg.reply("No coins");
-
-      const win = Math.random() > 0.5;
-      user.coins += win ? amt : -amt;
-      await user.save();
-
-      return msg.reply(win ? `+${amt}` : `-${amt}`);
-    }
-
-    // MOD
-    if (cmd === "kick") {
-      if (!msg.member.permissions.has("KickMembers")) return;
-      const u = msg.mentions.users.first();
-      if (!u) return;
-      await msg.guild.members.kick(u.id).catch(()=>{});
-      msg.reply("Kicked");
-    }
-
-    if (cmd === "ban") {
-      if (!msg.member.permissions.has("BanMembers")) return;
-      const u = msg.mentions.users.first();
-      if (!u) return;
-      await msg.guild.members.ban(u.id).catch(()=>{});
-      msg.reply("Banned");
-    }
-
-    // FUN (many)
-    if (cmd === "ping") msg.reply("Pong");
-    if (cmd === "8ball") {
-      const r = ["Yes","No","Maybe"];
-      msg.reply(r[Math.floor(Math.random()*3)]);
-    }
-
-    // RATING
-    if (cmd === "rate") {
-      if (!msg.member.permissions.has("ManageRoles")) return;
-
-      const score = parseInt(args[0]);
-      if (!score || score < 1 || score > 10) return;
-
-      const sub = await Submission.findOne({ status: "processing" });
-      if (!sub) return msg.reply("No submissions");
-
-      const target = await User.findOne({ userId: sub.userId });
-
-      const mmrMap = {
-        1:100,2:200,3:300,4:500,5:700,
-        6:900,7:1100,8:1300,9:1400,10:1500
-      };
-
-      target.mmr += mmrMap[score];
-      await target.save();
-
-      sub.status = "done";
-      await sub.save();
-
-      msg.reply(`Rated ${score}`);
-    }
-
-  } catch (e) {
-    console.error(e);
+    return msg.reply(`🔥 Code: ${code}`);
   }
+
+  // ECONOMY
+  if (cmd === "balance") return msg.reply(`💰 ${user.coins}`);
+  if (cmd === "daily") { user.coins += 500; await user.save(); return msg.reply("+500"); }
+
+  // GAMBLING
+  if (cmd === "coinflip") {
+    const win = Math.random() > 0.5;
+    user.coins += win ? 100 : -100;
+    await user.save();
+    return msg.reply(win ? "Win" : "Lose");
+  }
+
+  if (cmd === "bet") {
+    const amt = parseInt(args[0]) || 0;
+    if (user.coins < amt) return msg.reply("No coins");
+
+    const win = Math.random() > 0.5;
+    user.coins += win ? amt : -amt;
+    await user.save();
+
+    return msg.reply(win ? `+${amt}` : `-${amt}`);
+  }
+
+  // MOD
+  if (cmd === "kick") {
+    if (!msg.member.permissions.has("KickMembers")) return;
+    const u = msg.mentions.users.first();
+    if (!u) return;
+    await msg.guild.members.kick(u.id).catch(()=>{});
+    msg.reply("Kicked");
+  }
+
+  if (cmd === "ban") {
+    if (!msg.member.permissions.has("BanMembers")) return;
+    const u = msg.mentions.users.first();
+    if (!u) return;
+    await msg.guild.members.ban(u.id).catch(()=>{});
+    msg.reply("Banned");
+  }
+
+  // FUN
+  if (cmd === "ping") msg.reply("Pong");
+  if (cmd === "8ball") msg.reply(["Yes","No","Maybe"][Math.floor(Math.random()*3)]);
 });
 
-// ================= API =================
-app.get('/api/status', (_, res) => {
-  res.json({ online: client.isReady() });
-});
+// ===== API =====
+app.get('/api/status', (_, res) => res.json({ online: client.isReady() }));
 
 app.get('/api/dashboard', async (_, res) => {
   const users = await User.countDocuments();
@@ -307,6 +322,13 @@ app.get('/api/submissions', async (_, res) => {
   res.json(subs);
 });
 
+app.get('/api/download/:id', async (req, res) => {
+  const sub = await Submission.findOne({ id: req.params.id });
+  if (!sub || !sub.processedFile) return res.status(404).send("Not found");
+
+  res.download(sub.processedFile);
+});
+
 app.post('/api/redeem', async (req, res) => {
   const { code } = req.body;
   const found = await PremiumCode.findOne({ code, used: false });
@@ -319,7 +341,6 @@ app.post('/api/redeem', async (req, res) => {
   res.json({ success: true });
 });
 
-// ================= START =================
+// ===== START =====
 app.listen(process.env.PORT || 3000, () => console.log("🌐 API running"));
-
 client.login(process.env.DISCORD_TOKEN);
