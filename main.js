@@ -5,6 +5,7 @@ import {
   EmbedBuilder,
   ModalBuilder, TextInputBuilder,
   TextInputStyle, ActionRowBuilder,
+  ButtonBuilder, ButtonStyle,
   PermissionsBitField,
   ActivityType
 } from "discord.js";
@@ -15,11 +16,13 @@ import express from "express";
 import crypto from "crypto";
 import fs from "fs/promises";
 import fsSync from "fs";
+import path from "path";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import ffprobePath from "ffprobe-static";
-import { google } from "googleapis";
+import ytdl from "yt-dlp-exec";
 import cors from "cors";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 dotenv.config();
 
@@ -36,27 +39,19 @@ let processing = false;
 ffmpeg.setFfmpegPath(ffmpegPath);
 ffmpeg.setFfprobePath(ffprobePath.path);
 
-// ================= GOOGLE DRIVE (SAFE) =================
-let drive = null;
-
-try {
-  if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-    drive = google.drive({
-      version: "v3",
-      auth: new google.auth.GoogleAuth({
-        credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
-        scopes: ["https://www.googleapis.com/auth/drive"]
-      })
-    });
+// ================= R2 SETUP =================
+const r2 = new S3Client({
+  region: "auto",
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY,
+    secretAccessKey: process.env.R2_SECRET_KEY
   }
-} catch (e) {
-  console.log("⚠️ Google Drive not configured");
-}
+});
 
 // ================= DATABASE =================
 await mongoose.connect(process.env.MONGO_URI);
 
-// ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
@@ -138,9 +133,27 @@ const processQueue = async () => {
   const output = `${TEMP_DIR}/out_${id}.mp4`;
 
   try {
-    await interaction.editReply("⚠️ Downloader temporarily disabled");
-    await interaction.editReply("⚙️ Processing skipped");
-    await interaction.editReply("❌ Feature coming soon");
+    await interaction.editReply("📥 Downloading...");
+    await ytdl(url, { output: input });
+
+    await interaction.editReply("⚙️ Processing...");
+    await enhance(input, output);
+
+    await interaction.editReply("☁️ Uploading...");
+
+    const fileName = `video_${id}.mp4`;
+
+    await r2.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: fileName,
+      Body: fsSync.createReadStream(output),
+      ContentType: "video/mp4"
+    }));
+
+    const link = `https://${process.env.R2_BUCKET}.${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${fileName}`;
+
+    await interaction.user.send(`🎬 Your video: ${link}`);
+    await interaction.editReply("✅ Check DMs!");
 
   } catch (e) {
     console.error(e);
@@ -164,16 +177,15 @@ client.once("ready", async () => {
   const commands = [
     new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
     new SlashCommandBuilder().setName("profile").setDescription("Profile"),
-    new SlashCommandBuilder()
-      .setName("quality_method")
+    new SlashCommandBuilder().setName("quality_method")
       .setDescription("Enhance video")
-      .addStringOption(o => o.setName("url").setRequired(true))
+      .addStringOption(o=>o.setName("url").setRequired(true))
   ];
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   await rest.put(
     Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-    { body: commands.map(c => c.toJSON()) }
+    { body: commands.map(c=>c.toJSON()) }
   );
 });
 
@@ -193,21 +205,14 @@ client.on("messageCreate", async msg => {
   }
 
   if (cmd === "balance") return msg.reply(user.balance.toString());
-
-  if (cmd === "daily") {
-    user.balance += 500;
-    await user.save();
-    return msg.reply("+500");
-  }
+  if (cmd === "daily") { user.balance += 500; await user.save(); return msg.reply("+500"); }
 
   if (cmd === "ban") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
     const m = msg.mentions.members.first();
     if (m) await m.ban();
   }
 
   if (cmd === "kick") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
     const m = msg.mentions.members.first();
     if (m) await m.kick();
   }
@@ -220,7 +225,7 @@ client.on("interactionCreate", async i => {
 
       if (i.commandName === "profile") {
         const user = await User.findOne({ userId: i.user.id });
-        return i.reply(`MMR: ${user?.mmr || 1000}`);
+        return i.reply(`MMR: ${user?.mmr}`);
       }
 
       if (i.commandName === "submit") {
@@ -259,7 +264,6 @@ client.on("interactionCreate", async i => {
 
     if (i.isModalSubmit()) {
       const link = i.fields.getTextInputValue("link");
-
       await Submission.create({
         id: crypto.randomBytes(4).toString("hex"),
         userId: i.user.id,
@@ -278,9 +282,9 @@ client.on("interactionCreate", async i => {
 const app = express();
 app.use(cors());
 
-app.get("/", (_, res) => res.send("OK"));
+app.get("/", (_,res)=>res.send("OK"));
 
-app.get("/api/leaderboard", async (_, res) => {
+app.get("/api/leaderboard", async (_,res)=>{
   const top = await User.find().sort({ mmr: -1 }).limit(10);
   res.json(top);
 });
