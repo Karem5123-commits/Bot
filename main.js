@@ -1,8 +1,7 @@
 import {
   Client, SlashCommandBuilder, REST, Routes,
   EmbedBuilder, ModalBuilder, TextInputBuilder,
-  TextInputStyle, ActionRowBuilder, ButtonBuilder,
-  ButtonStyle, PermissionsBitField
+  TextInputStyle, ActionRowBuilder
 } from 'discord.js';
 
 import mongoose from 'mongoose';
@@ -20,8 +19,8 @@ dotenv.config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ================= SAFE START =================
-process.on('uncaughtException', console.error);
-process.on('unhandledRejection', console.error);
+process.on('uncaughtException', err => console.error("Uncaught:", err));
+process.on('unhandledRejection', err => console.error("Unhandled:", err));
 
 // ================= EXPRESS =================
 const app = express();
@@ -29,21 +28,20 @@ app.use(express.json());
 app.use(cors());
 
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
-app.get('/api/test', (_, res) => res.json({ message: "API working" }));
+app.get('/api/test', (_, res) => res.json({ ok: true }));
 
 // ================= DATABASE =================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo Connected"))
-  .catch(err => console.error(err));
+  .catch(err => console.error("Mongo Error:", err));
 
+// ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
   mmr: { type: Number, default: 1000 },
   rank: { type: String, default: "Bronze" },
-  submissions: { type: Number, default: 0 },
-  accepted: { type: Number, default: 0 },
-  rejected: { type: Number, default: 0 }
+  submissions: { type: Number, default: 0 }
 }));
 
 const Submission = mongoose.model("Submission", new mongoose.Schema({
@@ -51,48 +49,50 @@ const Submission = mongoose.model("Submission", new mongoose.Schema({
   userId: String,
   link: String,
   status: { type: String, default: "pending" },
-  processedFile: String,
-  aiScore: Number,
-  suggestedMMR: Number,
-  suggestedRank: String
+  processedFile: String
 }));
 
-// ================= VIDEO PROCESSOR =================
+const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
+  userId: String,
+  code: String,
+  used: { type: Boolean, default: false }
+}));
+
+// ================= VIDEO PROCESS =================
 async function processVideo(sub) {
+  const input = `./input_${sub.id}.mp4`;
+  const output = `./output_${sub.id}.mp4`;
+
   try {
-    console.log("🎬 Processing:", sub.link);
+    console.log("⬇️ Downloading video...");
 
-    const inputPath = `./input_${sub.id}.mp4`;
-    const outputPath = `./output_${sub.id}.mp4`;
-
-    // DOWNLOAD
     await ytdlp(sub.link, {
-      output: inputPath,
+      output: input,
       format: 'mp4'
     });
 
-    console.log("⬇️ Download complete");
+    console.log("⚙️ Processing video...");
 
-    // PROCESS (4K UPSCALE + SHARPEN)
     await new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
+      ffmpeg(input)
         .videoFilters([
           "scale=3840:2160:flags=lanczos",
-          "unsharp=5:5:1.0:5:5:0.0"
+          "unsharp=5:5:1.0"
         ])
-        .outputOptions('-preset fast')
         .on('end', resolve)
         .on('error', reject)
-        .save(outputPath);
+        .save(output);
     });
 
-    fs.unlinkSync(inputPath);
+    if (fs.existsSync(input)) fs.unlinkSync(input);
 
-    console.log("✅ Done:", outputPath);
-    return outputPath;
+    console.log("✅ Processing complete");
+    return output;
 
   } catch (err) {
     console.error("❌ Processing failed:", err);
+
+    if (fs.existsSync(input)) fs.unlinkSync(input);
     return null;
   }
 }
@@ -100,21 +100,49 @@ async function processVideo(sub) {
 // ================= DISCORD =================
 const client = new Client({ intents: 32767 });
 
+// READY
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   const cmds = [
     new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
-    new SlashCommandBuilder().setName("profile").setDescription("View profile"),
-    new SlashCommandBuilder().setName("review").setDescription("Review clips (staff)")
+    new SlashCommandBuilder().setName("profile").setDescription("View profile")
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-  await rest.put(
-    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-    { body: cmds }
-  );
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+      { body: cmds }
+    );
+  } catch (e) {
+    console.error("Command register error:", e);
+  }
+});
+
+// ================= BOOST DETECTION =================
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    const role = newMember.guild.roles.premiumSubscriberRole;
+    if (!role) return;
+
+    const had = oldMember.roles.cache.has(role.id);
+    const has = newMember.roles.cache.has(role.id);
+
+    if (!had && has) {
+      const code = crypto.randomBytes(4).toString("hex").toUpperCase();
+
+      await PremiumCode.create({ userId: newMember.id, code });
+
+      await newMember.send(
+        `🔥 Thanks for boosting!\n\nYour code: **${code}**`
+      ).catch(() => {});
+    }
+
+  } catch (err) {
+    console.error("Boost error:", err);
+  }
 });
 
 // ================= COMMANDS =================
@@ -142,21 +170,19 @@ client.on("interactionCreate", async i => {
 
       if (i.commandName === "profile") {
         let user = await User.findOne({ userId: i.user.id });
-        if (!user) user = await User.create({ userId: i.user.id, username: i.user.tag });
 
-        return i.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(i.user.username)
-              .addFields(
-                { name: "MMR", value: `${user.mmr}`, inline: true },
-                { name: "Rank", value: user.rank, inline: true }
-              )
-          ]
-        });
+        if (!user) {
+          user = await User.create({
+            userId: i.user.id,
+            username: i.user.tag
+          });
+        }
+
+        return i.reply(`MMR: ${user.mmr} | Rank: ${user.rank}`);
       }
     }
 
+    // ================= SUBMIT =================
     if (i.isModalSubmit()) {
       const link = i.fields.getTextInputValue("link");
       const id = crypto.randomBytes(4).toString("hex");
@@ -174,16 +200,18 @@ client.on("interactionCreate", async i => {
         { upsert: true }
       );
 
-      // PROCESS IN BACKGROUND
-      processVideo(sub).then(async (output) => {
-        if (!output) {
-          sub.status = "failed";
-          return sub.save();
+      processVideo(sub).then(async (file) => {
+        try {
+          if (!file) {
+            sub.status = "failed";
+          } else {
+            sub.status = "done";
+            sub.processedFile = file;
+          }
+          await sub.save();
+        } catch (e) {
+          console.error("Save error:", e);
         }
-
-        sub.status = "done";
-        sub.processedFile = output;
-        await sub.save();
       });
 
       return i.reply({
@@ -192,8 +220,8 @@ client.on("interactionCreate", async i => {
       });
     }
 
-  } catch (e) {
-    console.error(e);
+  } catch (err) {
+    console.error("Interaction error:", err);
   }
 });
 
@@ -208,7 +236,7 @@ app.get('/api/status', (req, res) => {
 });
 
 // DASHBOARD
-app.get('/api/dashboard', async (req, res) => {
+app.get('/api/dashboard', async (_, res) => {
   try {
     const users = await User.countDocuments();
     const subs = await Submission.countDocuments();
@@ -226,34 +254,40 @@ app.get('/api/dashboard', async (req, res) => {
 });
 
 // LEADERBOARD
-app.get('/api/leaderboard', async (req, res) => {
+app.get('/api/leaderboard', async (_, res) => {
   try {
     const users = await User.find().sort({ mmr: -1 }).limit(50);
-
-    res.json(users.map((u, i) => ({
-      position: i + 1,
-      username: u.username,
-      mmr: u.mmr
-    })));
+    res.json(users);
   } catch {
     res.json([]);
   }
 });
 
 // SUBMISSIONS (FIXED)
-app.get('/api/submissions', async (req, res) => {
+app.get('/api/submissions', async (_, res) => {
   try {
     const subs = await Submission.find().sort({ _id: -1 }).limit(20);
-
-    res.json(subs.map(s => ({
-      id: s.id,
-      link: s.link,
-      status: s.status,
-      processed: s.processedFile || null
-    })));
-
+    res.json(subs);
   } catch {
     res.json([]);
+  }
+});
+
+// REDEEM
+app.post('/api/redeem', async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    const found = await PremiumCode.findOne({ code, used: false });
+    if (!found) return res.json({ success: false });
+
+    found.used = true;
+    await found.save();
+
+    res.json({ success: true });
+
+  } catch {
+    res.json({ success: false });
   }
 });
 
