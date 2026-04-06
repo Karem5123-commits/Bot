@@ -2,7 +2,7 @@ import {
   Client, GatewayIntentBits, SlashCommandBuilder,
   REST, Routes, ModalBuilder, TextInputBuilder,
   TextInputStyle, ActionRowBuilder,
-  ButtonBuilder, ButtonStyle
+  ButtonBuilder, ButtonStyle, PermissionsBitField
 } from 'discord.js';
 
 import mongoose from 'mongoose';
@@ -19,24 +19,21 @@ import fs from 'fs';
 dotenv.config();
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-// ===== CONFIG =====
 const OWNERS = ["1347959266539081768","1399094217846030346"];
 
-// ===== SAFE =====
 process.on('uncaughtException', console.error);
 process.on('unhandledRejection', console.error);
 
-// ===== EXPRESS =====
+// EXPRESS
 const app = express();
 app.use(express.json());
 app.use(cors());
-
 app.get('/', (_, res) => res.send('🔥 Bot Running'));
 
-// ===== DB =====
+// DB
 mongoose.connect(process.env.MONGO_URI);
 
-// ===== MODELS =====
+// MODELS
 const User = mongoose.model("User", new mongoose.Schema({
   userId: String,
   username: String,
@@ -60,7 +57,7 @@ const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
   used: { type: Boolean, default: false }
 }));
 
-// ===== RANK =====
+// RANK
 function getRank(mmr) {
   if (mmr >= 1800) return "Grandmaster";
   if (mmr >= 1600) return "Master";
@@ -71,7 +68,7 @@ function getRank(mmr) {
   return "Bronze";
 }
 
-// ===== VIDEO =====
+// VIDEO
 async function processVideo(sub) {
   const input = `./in_${sub.id}.mp4`;
   const output = `./out_${sub.id}.mp4`;
@@ -98,7 +95,6 @@ async function processVideo(sub) {
 
     fs.existsSync(input) && fs.unlinkSync(input);
 
-    // ===== DISCORD PANEL =====
     const channel = await client.channels.fetch(process.env.REVIEW_CHANNEL);
 
     const buttons = [];
@@ -119,16 +115,14 @@ async function processVideo(sub) {
     });
 
   } catch (e) {
-    console.error(e);
     sub.status = "failed";
     await sub.save();
   }
 }
 
-// ===== DISCORD =====
+// DISCORD
 const client = new Client({ intents: Object.values(GatewayIntentBits) });
 
-// ===== SLASH =====
 client.once("ready", async () => {
   console.log(`✅ ${client.user.tag}`);
 
@@ -145,9 +139,10 @@ client.once("ready", async () => {
   );
 });
 
-// ===== INTERACTIONS =====
+// INTERACTIONS
 client.on("interactionCreate", async i => {
   try {
+
     if (i.isChatInputCommand()) {
 
       if (i.commandName === "submit") {
@@ -202,7 +197,7 @@ client.on("interactionCreate", async i => {
 
       if (type === "rate") {
 
-        if (!i.member.permissions.has("ManageRoles"))
+        if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles))
           return i.reply({ content: "Staff only", ephemeral: true });
 
         const sub = await Submission.findOne({ id: subId });
@@ -235,10 +230,9 @@ client.on("interactionCreate", async i => {
   }
 });
 
-// ===== PREFIX COMMANDS =====
+// PREFIX COMMANDS
 client.on("messageCreate", async msg => {
-  if (!msg.content.startsWith("!") && !msg.content.startsWith("?")) return;
-  if (msg.author.bot) return;
+  if ((!msg.content.startsWith("!") && !msg.content.startsWith("?")) || msg.author.bot) return;
 
   const args = msg.content.slice(1).split(/ +/);
   const cmd = args.shift().toLowerCase();
@@ -248,60 +242,97 @@ client.on("messageCreate", async msg => {
 
   // OWNER CODE
   if (msg.content.startsWith("?") && cmd === "code") {
-    if (!OWNERS.includes(msg.author.id)) return msg.reply("Owner only");
+    if (!OWNERS.includes(msg.author.id)) return;
 
     const code = crypto.randomBytes(4).toString("hex").toUpperCase();
     await PremiumCode.create({ userId: msg.author.id, code });
 
-    return msg.reply(`🔥 Code: ${code}`);
+    await msg.author.send(`🔥 Code: ${code}`).catch(()=>{});
+    return msg.reply("✅ Sent to DMs");
+  }
+
+  // BOOST QUALITY
+  if (cmd === "quality") {
+    if (!msg.member.premiumSince)
+      return msg.reply("🔒 Boost server to use this");
+
+    const link = args[0];
+    if (!link) return;
+
+    const id = crypto.randomBytes(4).toString("hex");
+
+    const sub = await Submission.create({
+      id,
+      userId: msg.author.id,
+      link,
+      status: "processing"
+    });
+
+    msg.reply("🎬 Processing in DMs...");
+
+    processVideo(sub).then(async () => {
+      if (!sub.processedFile) return msg.author.send("❌ Failed");
+
+      await msg.author.send({
+        content: "🎥 Done:",
+        files: [sub.processedFile]
+      }).catch(()=>msg.reply("Enable DMs"));
+    });
   }
 
   // ECONOMY
-  if (cmd === "balance") return msg.reply(`💰 ${user.coins}`);
-  if (cmd === "daily") { user.coins += 500; await user.save(); return msg.reply("+500"); }
+  if (cmd === "balance") return msg.author.send(`💰 ${user.coins}`);
+  if (cmd === "daily") { user.coins += 500; await user.save(); return msg.author.send("+500"); }
 
   // GAMBLING
   if (cmd === "coinflip") {
     const win = Math.random() > 0.5;
     user.coins += win ? 100 : -100;
     await user.save();
-    return msg.reply(win ? "Win" : "Lose");
+    return msg.author.send(win ? "Win" : "Lose");
   }
 
   if (cmd === "bet") {
     const amt = parseInt(args[0]) || 0;
-    if (user.coins < amt) return msg.reply("No coins");
+    if (user.coins < amt) return;
 
     const win = Math.random() > 0.5;
     user.coins += win ? amt : -amt;
     await user.save();
 
-    return msg.reply(win ? `+${amt}` : `-${amt}`);
+    return msg.author.send(win ? `+${amt}` : `-${amt}`);
   }
 
-  // MOD
+  // MOD COMMANDS
+  if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return;
+
   if (cmd === "kick") {
-    if (!msg.member.permissions.has("KickMembers")) return;
-    const u = msg.mentions.users.first();
-    if (!u) return;
-    await msg.guild.members.kick(u.id).catch(()=>{});
-    msg.reply("Kicked");
+    const m = msg.mentions.members.first();
+    if (m) await m.kick().catch(()=>{});
   }
 
   if (cmd === "ban") {
-    if (!msg.member.permissions.has("BanMembers")) return;
-    const u = msg.mentions.users.first();
-    if (!u) return;
-    await msg.guild.members.ban(u.id).catch(()=>{});
-    msg.reply("Banned");
+    const m = msg.mentions.members.first();
+    if (m) await m.ban().catch(()=>{});
   }
 
-  // FUN
-  if (cmd === "ping") msg.reply("Pong");
-  if (cmd === "8ball") msg.reply(["Yes","No","Maybe"][Math.floor(Math.random()*3)]);
+  if (cmd === "clear") {
+    const n = parseInt(args[0]) || 10;
+    await msg.channel.bulkDelete(n).catch(()=>{});
+  }
+
+  if (cmd === "lock")
+    await msg.channel.permissionOverwrites.edit(msg.guild.id, { SendMessages: false });
+
+  if (cmd === "unlock")
+    await msg.channel.permissionOverwrites.edit(msg.guild.id, { SendMessages: true });
+
+  if (cmd === "slowmode")
+    await msg.channel.setRateLimitPerUser(parseInt(args[0]) || 5);
+
 });
 
-// ===== API =====
+// API
 app.get('/api/status', (_, res) => res.json({ online: client.isReady() }));
 
 app.get('/api/dashboard', async (_, res) => {
@@ -322,25 +353,5 @@ app.get('/api/submissions', async (_, res) => {
   res.json(subs);
 });
 
-app.get('/api/download/:id', async (req, res) => {
-  const sub = await Submission.findOne({ id: req.params.id });
-  if (!sub || !sub.processedFile) return res.status(404).send("Not found");
-
-  res.download(sub.processedFile);
-});
-
-app.post('/api/redeem', async (req, res) => {
-  const { code } = req.body;
-  const found = await PremiumCode.findOne({ code, used: false });
-
-  if (!found) return res.json({ success: false });
-
-  found.used = true;
-  await found.save();
-
-  res.json({ success: true });
-});
-
-// ===== START =====
-app.listen(process.env.PORT || 3000, () => console.log("🌐 API running"));
+app.listen(process.env.PORT || 3000);
 client.login(process.env.DISCORD_TOKEN);
