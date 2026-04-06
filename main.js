@@ -45,7 +45,7 @@ app.get('/', (_, res) => res.send('🔥 Bot Running'));
 // ================= DATABASE =================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log("✅ Mongo Connected"))
-  .catch(err => console.error(err));
+  .catch(console.error);
 
 // ================= MODELS =================
 const User = mongoose.model("User", new mongoose.Schema({
@@ -95,6 +95,41 @@ const client = new Client({
 const PREFIX = "!";
 const OWNERS = ["1347959266539081768","1399094217846030346"];
 
+// ================= AUTO BOOST DM SYSTEM =================
+function generatePremiumCode() {
+  return crypto.randomBytes(5).toString("hex").toUpperCase();
+}
+
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    const wasBoosting = oldMember.premiumSince;
+    const isBoosting = newMember.premiumSince;
+
+    if (!wasBoosting && isBoosting) {
+      let user = await User.findOne({ userId: newMember.id });
+
+      if (!user) {
+        user = await User.create({
+          userId: newMember.id,
+          username: newMember.user.tag
+        });
+      }
+
+      const code = generatePremiumCode();
+      user.premiumCode = code;
+      await user.save();
+
+      await newMember.send(
+        `🚀 Thanks for boosting!\n\n🔐 Your Code:\n\`${code}\`\n\nUse !quality`
+      );
+
+      console.log(`💎 Code sent to ${newMember.user.tag}`);
+    }
+  } catch (err) {
+    console.error("Boost DM failed:", err);
+  }
+});
+
 // ================= READY =================
 client.once("clientReady", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -125,35 +160,31 @@ client.on("messageCreate", async msg => {
   let user = await User.findOne({ userId: msg.author.id });
   if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
 
-  // OWNER CODE
   if (cmd === "code") {
     if (!OWNERS.includes(msg.author.id)) return;
-    const code = crypto.randomBytes(4).toString("hex");
+    const code = generatePremiumCode();
     user.premiumCode = code;
     await user.save();
     await msg.author.send(`🔑 Code: ${code}`);
     return msg.reply("📩 Sent to DM");
   }
 
-  // QUALITY (BOOST / CODE LOCK)
   if (cmd === "quality") {
-    if (!user.premiumCode) return msg.reply("❌ Premium only (boost required)");
+    if (!user.premiumCode) return msg.reply("❌ Premium only");
     return msg.reply("🚀 6K QUALITY ENABLED");
   }
 
-  // GAMBLING
   if (cmd === "balance") return msg.reply(`💰 ${user.balance}`);
-  if (cmd === "daily") { user.balance+=500; await user.save(); return msg.reply("+500 coins"); }
+  if (cmd === "daily") { user.balance+=500; await user.save(); return msg.reply("+500"); }
 
   const gamble = (amt)=>Math.random()>0.5?(user.balance+=amt):(user.balance-=amt);
 
-  if (["coinflip","bet","slots","roulette","blackjack","crash","double","triple","risk","jackpot","flip","dice","spin","highlow","allin"].includes(cmd)){
+  if (["coinflip","slots","roulette","blackjack","crash","double","triple","risk","jackpot"].includes(cmd)){
     gamble(200);
     await user.save();
-    return msg.reply(`🎰 New balance: ${user.balance}`);
+    return msg.reply(`🎰 Balance: ${user.balance}`);
   }
 
-  // MOD COMMANDS (20+)
   if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return;
 
   const m = msg.mentions.members.first();
@@ -161,18 +192,12 @@ client.on("messageCreate", async msg => {
   if (cmd==="kick"&&m) await m.kick();
   if (cmd==="ban"&&m) await m.ban();
   if (cmd==="mute"&&m) await m.timeout(600000);
-  if (cmd==="unmute"&&m) await m.timeout(null);
-  if (cmd==="warn"&&m) msg.reply(`${m.user.tag} warned`);
   if (cmd==="clear") await msg.channel.bulkDelete(parseInt(args[0])||10);
-  if (cmd==="lock") await msg.channel.permissionOverwrites.edit(msg.guild.id,{SendMessages:false});
-  if (cmd==="unlock") await msg.channel.permissionOverwrites.edit(msg.guild.id,{SendMessages:true});
-  if (cmd==="slowmode") await msg.channel.setRateLimitPerUser(parseInt(args[0])||5);
 });
 
 // ================= INTERACTIONS =================
 client.on("interactionCreate", async i => {
   try {
-
     if (i.isChatInputCommand()) {
 
       if (i.commandName === "submit") {
