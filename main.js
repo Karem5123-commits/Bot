@@ -11,7 +11,13 @@ import express from 'express';
 import crypto from 'crypto';
 import cors from 'cors';
 
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from 'ffmpeg-static';
+import ytdlp from 'yt-dlp-exec';
+import fs from 'fs';
+
 dotenv.config();
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ================= SAFE START =================
 process.on('uncaughtException', console.error);
@@ -45,34 +51,50 @@ const Submission = mongoose.model("Submission", new mongoose.Schema({
   userId: String,
   link: String,
   status: { type: String, default: "pending" },
+  processedFile: String,
   aiScore: Number,
   suggestedMMR: Number,
   suggestedRank: String
 }));
 
-// ================= RANK SYSTEM =================
-const RANKS = [
-  { name: "Bronze", mmr: 0 },
-  { name: "Silver", mmr: 800 },
-  { name: "Gold", mmr: 1000 },
-  { name: "Platinum", mmr: 1200 },
-  { name: "Diamond", mmr: 1400 },
-  { name: "Master", mmr: 1600 },
-  { name: "Grandmaster", mmr: 1800 }
-];
+// ================= VIDEO PROCESSOR =================
+async function processVideo(sub) {
+  try {
+    console.log("🎬 Processing:", sub.link);
 
-function getRank(mmr) {
-  let rank = RANKS[0];
-  for (const r of RANKS) if (mmr >= r.mmr) rank = r;
-  return rank.name;
-}
+    const inputPath = `./input_${sub.id}.mp4`;
+    const outputPath = `./output_${sub.id}.mp4`;
 
-// ================= AI =================
-function generateScore() {
-  return Math.floor(Math.random() * 10) + 1;
-}
-function calculateMMRChange(score) {
-  return (score - 5) * 20;
+    // DOWNLOAD
+    await ytdlp(sub.link, {
+      output: inputPath,
+      format: 'mp4'
+    });
+
+    console.log("⬇️ Download complete");
+
+    // PROCESS (4K UPSCALE + SHARPEN)
+    await new Promise((resolve, reject) => {
+      ffmpeg(inputPath)
+        .videoFilters([
+          "scale=3840:2160:flags=lanczos",
+          "unsharp=5:5:1.0:5:5:0.0"
+        ])
+        .outputOptions('-preset fast')
+        .on('end', resolve)
+        .on('error', reject)
+        .save(outputPath);
+    });
+
+    fs.unlinkSync(inputPath);
+
+    console.log("✅ Done:", outputPath);
+    return outputPath;
+
+  } catch (err) {
+    console.error("❌ Processing failed:", err);
+    return null;
+  }
 }
 
 // ================= DISCORD =================
@@ -125,50 +147,13 @@ client.on("interactionCreate", async i => {
         return i.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle(`${i.user.username}`)
+              .setTitle(i.user.username)
               .addFields(
                 { name: "MMR", value: `${user.mmr}`, inline: true },
-                { name: "Rank", value: `${getRank(user.mmr)}`, inline: true }
+                { name: "Rank", value: user.rank, inline: true }
               )
           ]
         });
-      }
-
-      if (i.commandName === "review") {
-        if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
-          return i.reply({ content: "Staff only", ephemeral: true });
-        }
-
-        const sub = await Submission.findOne({ status: "pending" });
-        if (!sub) return i.reply("No submissions.");
-
-        const score = generateScore();
-        const mmrChange = calculateMMRChange(score);
-
-        const user = await User.findOne({ userId: sub.userId });
-        const newMMR = (user?.mmr || 1000) + mmrChange;
-        const suggestedRank = getRank(newMMR);
-
-        sub.aiScore = score;
-        sub.suggestedMMR = mmrChange;
-        sub.suggestedRank = suggestedRank;
-        await sub.save();
-
-        const embed = new EmbedBuilder()
-          .setTitle("🎯 AI Judgment")
-          .setDescription(sub.link)
-          .addFields(
-            { name: "Score", value: `${score}/10`, inline: true },
-            { name: "MMR Change", value: `${mmrChange}`, inline: true },
-            { name: "Suggested Rank", value: `${suggestedRank}`, inline: true }
-          );
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`accept_${sub.id}`).setLabel("Accept").setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(`reject_${sub.id}`).setLabel("Reject").setStyle(ButtonStyle.Danger)
-        );
-
-        return i.reply({ embeds: [embed], components: [row] });
       }
     }
 
@@ -176,7 +161,12 @@ client.on("interactionCreate", async i => {
       const link = i.fields.getTextInputValue("link");
       const id = crypto.randomBytes(4).toString("hex");
 
-      await Submission.create({ id, userId: i.user.id, link });
+      const sub = await Submission.create({
+        id,
+        userId: i.user.id,
+        link,
+        status: "processing"
+      });
 
       await User.updateOne(
         { userId: i.user.id },
@@ -184,44 +174,22 @@ client.on("interactionCreate", async i => {
         { upsert: true }
       );
 
-      return i.reply({ content: "✅ Submitted", ephemeral: true });
-    }
+      // PROCESS IN BACKGROUND
+      processVideo(sub).then(async (output) => {
+        if (!output) {
+          sub.status = "failed";
+          return sub.save();
+        }
 
-    if (i.isButton()) {
-      const [action, id] = i.customId.split("_");
-      const sub = await Submission.findOne({ id });
-      if (!sub) return;
-
-      const user = await User.findOne({ userId: sub.userId });
-      const newMMR = (user?.mmr || 1000) + sub.suggestedMMR;
-
-      if (action === "accept") {
-        await User.updateOne(
-          { userId: sub.userId },
-          {
-            mmr: newMMR,
-            rank: getRank(newMMR),
-            $inc: { accepted: 1 }
-          }
-        );
-
-        sub.status = "accepted";
+        sub.status = "done";
+        sub.processedFile = output;
         await sub.save();
+      });
 
-        return i.update({ content: "✅ Accepted & applied", components: [] });
-      }
-
-      if (action === "reject") {
-        await User.updateOne(
-          { userId: sub.userId },
-          { $inc: { rejected: 1 } }
-        );
-
-        sub.status = "rejected";
-        await sub.save();
-
-        return i.update({ content: "❌ Rejected", components: [] });
-      }
+      return i.reply({
+        content: "🚀 Processing started!",
+        ephemeral: true
+      });
     }
 
   } catch (e) {
@@ -229,7 +197,7 @@ client.on("interactionCreate", async i => {
   }
 });
 
-// ================= API ROUTES =================
+// ================= API =================
 
 // STATUS
 app.get('/api/status', (req, res) => {
@@ -242,21 +210,17 @@ app.get('/api/status', (req, res) => {
 // DASHBOARD
 app.get('/api/dashboard', async (req, res) => {
   try {
-    const totalUsers = await User.countDocuments();
-    const totalSubs = await Submission.countDocuments();
-
-    const processed = await Submission.countDocuments({
-      status: { $in: ["accepted", "rejected"] }
-    });
+    const users = await User.countDocuments();
+    const subs = await Submission.countDocuments();
+    const processed = await Submission.countDocuments({ status: "done" });
 
     res.json({
-      users: totalUsers,
-      submissions: totalSubs,
+      users,
+      submissions: subs,
       stats: { totalProcessed: processed }
     });
 
-  } catch (e) {
-    console.error(e);
+  } catch {
     res.json({ users: 0, submissions: 0, stats: { totalProcessed: 0 } });
   }
 });
@@ -268,23 +232,27 @@ app.get('/api/leaderboard', async (req, res) => {
 
     res.json(users.map((u, i) => ({
       position: i + 1,
-      username: u.username || "Unknown",
-      mmr: u.mmr,
-      rank: getRank(u.mmr)
+      username: u.username,
+      mmr: u.mmr
     })));
-  } catch (e) {
-    console.error(e);
+  } catch {
     res.json([]);
   }
 });
 
-// SUBMISSIONS (🔥 FIXED)
+// SUBMISSIONS (FIXED)
 app.get('/api/submissions', async (req, res) => {
   try {
-    const subs = await Submission.find({ status: "pending" });
-    res.json(subs || []);
-  } catch (e) {
-    console.error(e);
+    const subs = await Submission.find().sort({ _id: -1 }).limit(20);
+
+    res.json(subs.map(s => ({
+      id: s.id,
+      link: s.link,
+      status: s.status,
+      processed: s.processedFile || null
+    })));
+
+  } catch {
     res.json([]);
   }
 });
@@ -294,11 +262,6 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log(`🌐 API running on port ${PORT}`);
-  console.log("✅ Routes loaded");
 });
 
-console.log("🚀 Starting bot...");
-
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => console.log("✅ Discord login successful"))
-  .catch(err => console.error(err));
+client.login(process.env.DISCORD_TOKEN);
