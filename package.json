@@ -1,8 +1,8 @@
 {
-  "name": "discord-ai-bot",
+  "name": "discord-bot",
   "version": "1.0.0",
-  "main": "main.js",
   "type": "module",
+  "main": "main.js",
   "scripts": {
     "start": "node main.js"
   },
@@ -16,7 +16,6 @@
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
     "form-data": "^4.0.0",
-    "googleapis": "^140.0.0",
     "mongoose": "^8.3.0",
     "yt-dlp-exec": "^2.4.0"
   }
