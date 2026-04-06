@@ -31,12 +31,10 @@ const startTime = Date.now();
 app.use((req, res, next) => {
   requestCount++;
   const start = Date.now();
-
   res.on("finish", () => {
     const duration = Date.now() - start;
     console.log(`🌐 ${req.method} ${req.url} | ${res.statusCode} | ${duration}ms | Total: ${requestCount}`);
   });
-
   next();
 });
 
@@ -81,6 +79,10 @@ const getRank = (mmr) => {
   return "Bronze";
 };
 
+function generatePremiumCode() {
+  return crypto.randomBytes(5).toString("hex").toUpperCase();
+}
+
 // ================= DISCORD =================
 const client = new Client({
   intents: [
@@ -95,38 +97,23 @@ const client = new Client({
 const PREFIX = "!";
 const OWNERS = ["1347959266539081768","1399094217846030346"];
 
-// ================= AUTO BOOST DM SYSTEM =================
-function generatePremiumCode() {
-  return crypto.randomBytes(5).toString("hex").toUpperCase();
-}
-
+// ================= AUTO BOOST DM =================
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   try {
-    const wasBoosting = oldMember.premiumSince;
-    const isBoosting = newMember.premiumSince;
-
-    if (!wasBoosting && isBoosting) {
+    if (!oldMember.premiumSince && newMember.premiumSince) {
       let user = await User.findOne({ userId: newMember.id });
-
-      if (!user) {
-        user = await User.create({
-          userId: newMember.id,
-          username: newMember.user.tag
-        });
-      }
+      if (!user) user = await User.create({ userId: newMember.id, username: newMember.user.tag });
 
       const code = generatePremiumCode();
       user.premiumCode = code;
       await user.save();
 
-      await newMember.send(
-        `🚀 Thanks for boosting!\n\n🔐 Your Code:\n\`${code}\`\n\nUse !quality`
-      );
+      await newMember.send(`🚀 Thanks for boosting!\n🔐 Code: \`${code}\`\nUse !quality`);
 
-      console.log(`💎 Code sent to ${newMember.user.tag}`);
+      console.log(`💎 Boost → Code sent to ${newMember.user.tag}`);
     }
-  } catch (err) {
-    console.error("Boost DM failed:", err);
+  } catch (e) {
+    console.error("Boost DM error:", e);
   }
 });
 
@@ -160,6 +147,7 @@ client.on("messageCreate", async msg => {
   let user = await User.findOne({ userId: msg.author.id });
   if (!user) user = await User.create({ userId: msg.author.id, username: msg.author.tag });
 
+  // OWNER CODE
   if (cmd === "code") {
     if (!OWNERS.includes(msg.author.id)) return;
     const code = generatePremiumCode();
@@ -169,11 +157,13 @@ client.on("messageCreate", async msg => {
     return msg.reply("📩 Sent to DM");
   }
 
+  // QUALITY LOCK
   if (cmd === "quality") {
     if (!user.premiumCode) return msg.reply("❌ Premium only");
     return msg.reply("🚀 6K QUALITY ENABLED");
   }
 
+  // GAMBLING
   if (cmd === "balance") return msg.reply(`💰 ${user.balance}`);
   if (cmd === "daily") { user.balance+=500; await user.save(); return msg.reply("+500"); }
 
@@ -185,10 +175,10 @@ client.on("messageCreate", async msg => {
     return msg.reply(`🎰 Balance: ${user.balance}`);
   }
 
+  // MODERATION
   if (!msg.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) return;
 
   const m = msg.mentions.members.first();
-
   if (cmd==="kick"&&m) await m.kick();
   if (cmd==="ban"&&m) await m.ban();
   if (cmd==="mute"&&m) await m.timeout(600000);
@@ -287,6 +277,10 @@ client.on("interactionCreate", async i => {
   }
 });
 
+// ================= AUTO RECONNECT =================
+client.on("disconnect", () => console.log("❌ Disconnected"));
+client.on("reconnecting", () => console.log("🔄 Reconnecting..."));
+
 // ================= API =================
 app.get('/api/status', (_,res)=>{
   res.json({
@@ -316,10 +310,24 @@ app.get('/api/submissions', async (_,res)=>{
 app.get('/api/season', (_,res)=>res.json({season:1,daysLeft:30}));
 
 // ================= START =================
-app.listen(process.env.PORT||3000, () => {
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
   console.log("🌐 API STARTED SUCCESSFULLY");
 });
 
+console.log("🚀 Attempting Discord login...");
+
+if (!process.env.DISCORD_TOKEN) {
+  console.error("❌ DISCORD_TOKEN MISSING");
+  process.exit(1);
+}
+
 client.login(process.env.DISCORD_TOKEN)
   .then(()=>console.log("✅ Discord Connected"))
-  .catch(console.error);
+  .catch(err=>{
+    console.error("❌ LOGIN FAILED:", err);
+  });
+
+client.on("error", console.error);
+client.on("shardError", console.error);
