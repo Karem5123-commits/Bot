@@ -103,11 +103,80 @@ function panel(title, desc, color = 0x00ffff) {
 }
 
 // ================= STARTUP =================
-client.once("ready", () => {
+client.once("ready", async () => {
   console.clear();
-  console.log(`🔥 ${client.user.tag} ONLINE`);
-});
 
+  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+  const type = async (text, speed = 10) => {
+    for (const char of text) {
+      process.stdout.write(char);
+      await sleep(speed);
+    }
+    process.stdout.write("\n");
+  };
+
+  const progressBar = async () => {
+    let bar = "";
+    for (let i = 0; i <= 100; i += 5) {
+      bar = "█".repeat(i / 5) + "░".repeat(20 - i / 5);
+      process.stdout.write(`\r⚡ Loading: [${bar}] ${i}%`);
+      await sleep(60);
+    }
+    process.stdout.write("\n");
+  };
+
+  await type("🔌 Booting GOD CORE...");
+  await sleep(200);
+
+  await type("⚙️ Injecting modules...");
+  await sleep(200);
+
+  await progressBar();
+
+  await type("📡 Connecting to Discord Gateway...");
+  await sleep(300);
+
+  await type("🧠 Syncing neural MMR database...");
+  await sleep(300);
+
+  await type("🎬 Spinning up video engine...");
+  await sleep(300);
+
+  await type("🔐 Running security protocols...");
+  await sleep(300);
+
+  await type("🐦 Initializing Falcon AI...");
+  await sleep(400);
+
+  console.log(`
+        🐦
+      🐦🐦
+    🐦   🐦
+   🐦     🐦
+ 🐦  GOD   🐦
+   🐦     🐦
+    🐦   🐦
+      🐦🐦
+        🐦
+  `);
+
+  await sleep(300);
+
+  console.log(`
+██████╗  ██████╗ ██████╗ 
+██╔══██╗██╔═══██╗██╔══██╗
+██████╔╝██║   ██║██████╔╝
+██╔═══╝ ██║   ██║██╔══██╗
+██║     ╚██████╔╝██║  ██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝
+`);
+
+  await type("🔥 GOD MODE ACTIVATED", 20);
+  await type(`🤖 ${client.user.tag} ONLINE`, 20);
+
+  console.log("\n🚀 SYSTEM STATUS: FULLY OPERATIONAL\n");
+});
 // ================= VIDEO =================
 async function processVideo(link, id, userId) {
   const output = `out_${id}.mp4`;
