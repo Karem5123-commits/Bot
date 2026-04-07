@@ -14,6 +14,7 @@ import {
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import express from "express";
+import cors from "cors";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import crypto from "crypto";
@@ -38,8 +39,17 @@ const RANKS = [
 
 // ================= EXPRESS =================
 const app = express();
-app.get("/", (_, res) => res.send("🔥 Bot Running"));
-app.listen(process.env.PORT || 3000);
+
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"]
+}));
+
+app.use(express.json());
+
+app.get("/", (_, res) => {
+  res.send("🔥 GOD MODE API ONLINE");
+});
 
 // ================= DATABASE =================
 await mongoose.connect(process.env.MONGO_URI);
@@ -155,7 +165,6 @@ client.on("messageCreate", async msg => {
     { upsert: true, new: true }
   );
 
-  // ===== SUBMIT =====
   if (cmd === "submit") {
     return msg.reply({
       content: "🎬 Click below to submit your clip",
@@ -170,7 +179,6 @@ client.on("messageCreate", async msg => {
     });
   }
 
-  // ===== BOOST =====
   if (cmd === "boost") {
     const now = Date.now();
 
@@ -195,14 +203,12 @@ client.on("messageCreate", async msg => {
     return msg.reply(`🚀 Boosted!\n+${reward} coins\n+25 MMR\n🔥 Streak: ${user.boostStreak}`);
   }
 
-  // ===== PROFILE =====
   if (cmd === "profile") {
     return msg.reply(
       `Rank: ${getRank(user.mmr).name}\nMMR: ${user.mmr}\nPeak: ${user.peakMMR}\nCoins: ${user.coins}`
     );
   }
 
-  // ===== LEADERBOARD =====
   if (cmd === "leaderboard") {
     const top = await User.find().sort({ mmr: -1 }).limit(10);
 
@@ -215,7 +221,6 @@ client.on("messageCreate", async msg => {
 // ================= INTERACTIONS =================
 client.on("interactionCreate", async i => {
 
-  // ===== BUTTON → OPEN MODAL =====
   if (i.isButton() && i.customId === "open_submit_modal") {
     const modal = new ModalBuilder()
       .setCustomId("submit_modal")
@@ -234,7 +239,6 @@ client.on("interactionCreate", async i => {
     return i.showModal(modal);
   }
 
-  // ===== MODAL =====
   if (i.isModalSubmit() && i.customId === "submit_modal") {
     const link = i.fields.getTextInputValue("link");
 
@@ -248,7 +252,6 @@ client.on("interactionCreate", async i => {
     return i.reply({ content: "🚀 Processing started!", ephemeral: true });
   }
 
-  // ===== STAFF =====
   if (i.isButton()) {
     if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles))
       return i.reply({ content: "Staff only", ephemeral: true });
@@ -294,6 +297,29 @@ client.on("interactionCreate", async i => {
   }
 });
 
+// ================= API =================
+app.get("/api/status", (_, res) => {
+  res.json({
+    online: client.isReady(),
+    uptime: process.uptime()
+  });
+});
+
+app.get("/api/leaderboard", async (_, res) => {
+  const users = await User.find().sort({ mmr: -1 }).limit(50);
+  res.json(users);
+});
+
+app.get("/api/dashboard", async (_, res) => {
+  const users = await User.countDocuments();
+  const top = await User.find().sort({ mmr: -1 }).limit(1);
+
+  res.json({
+    users,
+    topPlayer: top[0] || null
+  });
+});
+
 // ================= CLEANUP =================
 setInterval(() => {
   fs.readdirSync(".")
@@ -305,5 +331,9 @@ setInterval(() => {
     });
 }, 3600000);
 
-// ================= LOGIN =================
+// ================= START =================
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🌐 API running");
+});
+
 client.login(process.env.DISCORD_TOKEN);
