@@ -147,22 +147,18 @@ client.on("messageCreate", async msg => {
 
   // ===== SUBMIT =====
   if (cmd === "submit") {
-    const modal = new ModalBuilder()
-      .setCustomId("submit_modal")
-      .setTitle("Submit Clip");
-
-    modal.addComponents(
+  return msg.reply({
+    content: "🎬 Click below to submit your clip",
+    components: [
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("link")
-          .setLabel("Direct Video URL")
-          .setStyle(TextInputStyle.Short)
+        new ButtonBuilder()
+          .setCustomId("open_submit_modal")
+          .setLabel("Submit Clip")
+          .setStyle(ButtonStyle.Primary)
       )
-    );
-
-    return msg.reply("Use slash command version or paste link here soon");
-  }
-
+    ]
+  });
+}
   // ===== BOOST SYSTEM =====
   if (cmd === "boost") {
     const now = Date.now();
