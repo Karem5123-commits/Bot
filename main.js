@@ -7,7 +7,8 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  PermissionsBitField
+  PermissionsBitField,
+  EmbedBuilder
 } from "discord.js";
 
 import mongoose from "mongoose";
@@ -45,7 +46,10 @@ const User = mongoose.model("User", new mongoose.Schema({
   coins: { type: Number, default: 1000 },
   lastBoost: { type: Number, default: 0 },
   boostStreak: { type: Number, default: 0 },
-  peakMMR: { type: Number, default: 900 }
+  peakMMR: { type: Number, default: 900 },
+
+  qualityCode: String,
+  qualityUnlocked: { type: Boolean, default: false }
 }));
 
 // ===== SUBMISSIONS =====
@@ -54,14 +58,6 @@ const Submission = mongoose.model("Submission", new mongoose.Schema({
   userId: String,
   link: String,
   status: { type: String, default: "processing" },
-  createdAt: { type: Date, default: Date.now }
-}));
-
-// ===== PREMIUM CODES =====
-const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
-  code: String,
-  used: { type: Boolean, default: false },
-  usedBy: String,
   createdAt: { type: Date, default: Date.now }
 }));
 
@@ -96,62 +92,20 @@ const client = new Client({
   ]
 });
 
-// ================= STARTUP ANIMATION =================
-client.once("ready", async () => {
+// ================= PANEL HELPER =================
+function panel(title, desc, color = 0x00ffff) {
+  return new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(desc)
+    .setColor(color)
+    .setFooter({ text: "GOD MODE SYSTEM" })
+    .setTimestamp();
+}
+
+// ================= STARTUP =================
+client.once("ready", () => {
   console.clear();
-
-  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-
-  const typeLine = async (text, delay = 15) => {
-    for (const char of text) {
-      process.stdout.write(char);
-      await sleep(delay);
-    }
-    process.stdout.write("\n");
-  };
-
-  await typeLine("🔌 Initializing GOD CORE...");
-  await sleep(300);
-
-  await typeLine("⚙️ Loading modules...");
-  await sleep(300);
-
-  await typeLine("📡 Connecting to Discord API...");
-  await sleep(500);
-
-  await typeLine("🧠 Syncing MMR database...");
-  await sleep(400);
-
-  await typeLine("🎬 Initializing video processing engine...");
-  await sleep(500);
-
-  await typeLine("🚀 Starting API server...");
-  await sleep(400);
-
-  await typeLine("🔐 Verifying permissions...");
-  await sleep(300);
-
-  await typeLine("✅ All systems operational.");
-  await sleep(500);
-
-  console.log(`
-██████╗  ██████╗ ██████╗ 
-██╔══██╗██╔═══██╗██╔══██╗
-██████╔╝██║   ██║██████╔╝
-██╔═══╝ ██║   ██║██╔══██╗
-██║     ╚██████╔╝██║  ██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝
-
-🔥 GOD MODE ACTIVATED
-🤖 ${client.user.tag} ONLINE
-`);
-});
-
-// ================= AUTO ROLE =================
-client.on("guildMemberAdd", async member => {
-  const user = await User.findOne({ userId: member.id });
-  if (!user) return;
-  applyRank(member, user.mmr);
+  console.log(`🔥 ${client.user.tag} ONLINE`);
 });
 
 // ================= VIDEO =================
@@ -159,43 +113,33 @@ async function processVideo(link, id, userId) {
   const output = `out_${id}.mp4`;
   const sub = await Submission.create({ id, userId, link });
 
+  const user = await User.findOne({ userId });
+
+  const filters = user?.qualityUnlocked
+    ? ["scale=1920:1080", "unsharp=5:5:1.0"]
+    : ["scale=1280:720"];
+
   try {
-    await Promise.race([
-      new Promise((res, rej) => {
-        ffmpeg(link)
-          .videoFilters(["scale=1920:1080"])
-          .on("end", res)
-          .on("error", rej)
-          .save(output);
-      }),
-      new Promise((_, rej) => setTimeout(() => rej("Timeout"), 300000))
-    ]);
+    await new Promise((res, rej) => {
+      ffmpeg(link)
+        .videoFilters(filters)
+        .on("end", res)
+        .on("error", rej)
+        .save(output);
+    });
 
     sub.status = "done";
     await sub.save();
 
     const channel = await client.channels.fetch(REVIEW_CHANNEL);
 
-    const buttons = RANKS.map(r =>
-      new ButtonBuilder()
-        .setCustomId(`rank_${r.name}_${userId}`)
-        .setLabel(r.name)
-        .setStyle(ButtonStyle.Primary)
-    );
-
-    const row1 = new ActionRowBuilder().addComponents(buttons.slice(0,5));
-    const row2 = new ActionRowBuilder().addComponents(
-      ...buttons.slice(5),
-      new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
-    );
-
     await channel.send({
-      content: `🎬 <@${userId}>`,
-      components: [row1, row2]
+      embeds: [
+        panel("🎬 NEW SUBMISSION", `<@${userId}>\n[View Clip](${link})`)
+      ]
     });
 
-  } catch (e) {
+  } catch {
     sub.status = "failed";
     await sub.save();
   }
@@ -213,18 +157,10 @@ client.on("messageCreate", async msg => {
     { upsert: true, new: true }
   );
 
-  if (cmd === "code") {
-    if (msg.author.id !== OWNER_ID) return msg.reply("Owner only");
-
-    const code = crypto.randomBytes(4).toString("hex").toUpperCase();
-    await PremiumCode.create({ code });
-
-    return msg.reply(`🔥 CODE: ${code}`);
-  }
-
+  // ===== SUBMIT =====
   if (cmd === "submit") {
     return msg.reply({
-      content: "🎬 Submit clip",
+      embeds: [panel("🎬 SUBMIT CLIP", "Click below")],
       components: [
         new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -236,10 +172,11 @@ client.on("messageCreate", async msg => {
     });
   }
 
+  // ===== BOOST =====
   if (cmd === "boost") {
     const now = Date.now();
     if (now - user.lastBoost < 3600000)
-      return msg.reply("⏳ Wait 1 hour");
+      return msg.reply({ embeds: [panel("⏳ WAIT", "1 hour cooldown", 0xff0000)] });
 
     user.boostStreak++;
     user.lastBoost = now;
@@ -248,24 +185,61 @@ client.on("messageCreate", async msg => {
     user.coins += reward;
     user.mmr += 25;
 
-    if (user.mmr > user.peakMMR) user.peakMMR = user.mmr;
+    // QUALITY CODE
+    const code = crypto.randomBytes(3).toString("hex").toUpperCase();
+    user.qualityCode = code;
 
     await user.save();
 
-    const member = await msg.guild.members.fetch(msg.author.id);
-    await applyRank(member, user.mmr);
+    try {
+      await msg.author.send(
+        `🔥 QUALITY CODE\nUse !quality and send:\n${code}`
+      );
+    } catch {}
 
-    return msg.reply(`🚀 +${reward} coins | +25 MMR`);
+    return msg.reply({
+      embeds: [panel("🚀 BOOSTED", `+${reward} coins\n+25 MMR\n📩 Code sent to DMs`)]
+    });
   }
 
+  // ===== QUALITY =====
+  if (cmd === "quality") {
+    return msg.reply({
+      embeds: [panel("📩 CHECK DMS", "Send your code in DM")]
+    }).then(m => setTimeout(() => m.delete().catch(()=>{}), 10000));
+  }
+
+  // ===== PROFILE =====
   if (cmd === "profile") {
-    return msg.reply(`MMR: ${user.mmr} | Coins: ${user.coins}`);
+    return msg.reply({
+      embeds: [panel("👤 PROFILE", `MMR: ${user.mmr}\nCoins: ${user.coins}`)]
+    });
+  }
+});
+
+// ================= DM CODE SYSTEM =================
+client.on("messageCreate", async msg => {
+  if (msg.guild || msg.author.bot) return;
+
+  const user = await User.findOne({ userId: msg.author.id });
+  if (!user || !user.qualityCode) return;
+
+  if (msg.content.toUpperCase() === user.qualityCode) {
+    user.qualityUnlocked = true;
+    user.qualityCode = null;
+    await user.save();
+
+    const reply = await msg.reply("✅ QUALITY UNLOCKED");
+
+    setTimeout(() => {
+      msg.delete().catch(()=>{});
+      reply.delete().catch(()=>{});
+    }, 10000);
   }
 });
 
 // ================= INTERACTIONS =================
 client.on("interactionCreate", async i => {
-
   if (i.isButton() && i.customId === "open_submit_modal") {
     const modal = new ModalBuilder()
       .setCustomId("submit_modal")
@@ -289,9 +263,11 @@ client.on("interactionCreate", async i => {
 
     processVideo(link, id, i.user.id);
 
-    return i.reply({ content: "🚀 Processing", ephemeral: true });
+    return i.reply({
+      embeds: [panel("🚀 PROCESSING", "Your clip is being processed")],
+      ephemeral: true
+    });
   }
-
 });
 
 // ================= API =================
