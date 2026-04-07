@@ -25,6 +25,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 // ================= CONFIG =================
 const PREFIX = "!";
 const REVIEW_CHANNEL = process.env.REVIEW_CHANNEL;
+const REVIEW_GUILD = "1488868987805892730"; // ✅ FORCED SERVER
 
 // ================= EXPRESS =================
 const app = express();
@@ -88,7 +89,7 @@ const client = new Client({
 const panel = (t,d,c=0x00ffff) =>
   new EmbedBuilder().setTitle(t).setDescription(d).setColor(c).setTimestamp();
 
-// ================= STARTUP (YOUR BIRD KEPT) =================
+// ================= STARTUP =================
 client.once("ready", async () => {
   console.clear();
   const sleep = ms => new Promise(r=>setTimeout(r,ms));
@@ -119,7 +120,9 @@ client.once("ready", async () => {
 async function processVideo(link, id, userId) {
   const sub = await Submission.create({ id, userId, link });
 
-  const channel = await client.channels.fetch(REVIEW_CHANNEL);
+  // ✅ ALWAYS SEND TO YOUR SERVER
+  const guild = await client.guilds.fetch(REVIEW_GUILD);
+  const channel = await guild.channels.fetch(REVIEW_CHANNEL);
 
   const buttons = RANKS.map(r =>
     new ButtonBuilder()
@@ -140,7 +143,7 @@ async function processVideo(link, id, userId) {
     components:[row1,row2]
   });
 
-  // background processing
+  // background processing (kept)
   ffmpeg(link)
     .on("end", async ()=>{ sub.status="done"; await sub.save(); })
     .on("error", async ()=>{ sub.status="failed"; await sub.save(); })
@@ -210,7 +213,9 @@ client.on("interactionCreate", async i => {
     user.mmr = rank.mmr;
     await user.save();
 
-    const member = await i.guild.members.fetch(userId);
+    const guild = await client.guilds.fetch(REVIEW_GUILD);
+    const member = await guild.members.fetch(userId);
+
     await applyRank(member, user.mmr);
 
     return i.reply({embeds:[panel("RANK SET",`${rank.name}`)]});
@@ -227,7 +232,9 @@ client.on("interactionCreate", async i => {
 
     await user.save();
 
-    const member = await i.guild.members.fetch(userId);
+    const guild = await client.guilds.fetch(REVIEW_GUILD);
+    const member = await guild.members.fetch(userId);
+
     await applyRank(member, user.mmr);
 
     return i.reply({embeds:[panel("MMR UPDATED",`${user.mmr}`)]});
