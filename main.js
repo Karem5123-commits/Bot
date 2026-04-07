@@ -1,307 +1,206 @@
-import {
-  Client,
-  GatewayIntentBits,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  EmbedBuilder
-} from "discord.js";
+require('dotenv').config();
+const { 
+    Client, GatewayIntentBits, Partials, EmbedBuilder, 
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, 
+    TextInputBuilder, TextInputStyle, AttachmentBuilder 
+} = require('discord.js');
+const mongoose = require('mongoose');
+const express = require('express');
+const colors = require('colors');
+const ffmpeg = require('fluent-ffmpeg');
+const fs = require('fs');
 
-import mongoose from "mongoose";
-import dotenv from "dotenv";
-import express from "express";
-import cors from "cors";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegPath from "ffmpeg-static";
-import crypto from "crypto";
-import fs from "fs";
+// ================= [ ⚙️ CONFIGURATION HUB ] =================
+const CONFIG = {
+    MAIN_GUILD: "1488203882130837704",    
+    REVIEW_GUILD: "1488868987805892730",  
+    REVIEW_CHAN: "1489069664414859326",   
+    RANKS: {
+        "SSS": { id: "1488208025859788860", elo: 100 },
+        "SS+": { id: "1488208185633280041", elo: 75 },
+        "SS":  { id: "1488208281930432602", elo: 50 },
+        "S+":  { id: "1488208494170738793", elo: 40 },
+        "S":   { id: "1488208584142753863", elo: 25 },
+        "A":   { id: "1488208696759685190", elo: 10 }
+    }
+};
 
-dotenv.config();
-ffmpeg.setFfmpegPath(ffmpegPath);
-
-// ================= CONFIG =================
-const PREFIX = "!";
-const REVIEW_GUILD = "1488868987805892730";
-const REVIEW_CHANNEL = "1489069664414859326";
-
-// ================= EXPRESS =================
-const app = express();
-app.use(cors({ origin: "*" }));
-app.use(express.json());
-
-app.get("/", (_, res) => res.send("🔥 GOD MODE API ONLINE"));
-
-// ================= DATABASE =================
-await mongoose.connect(process.env.MONGO_URI);
-
-// ===== USER =====
-const User = mongoose.model("User", new mongoose.Schema({
-  userId: String,
-  mmr: { type: Number, default: 900 },
-  coins: { type: Number, default: 1000 },
-  lastBoost: { type: Number, default: 0 },
-  boostStreak: { type: Number, default: 0 },
-  peakMMR: { type: Number, default: 900 },
-  qualityCode: String,
-  qualityUnlocked: { type: Boolean, default: false }
+// ================= [ 🗄️ DATABASE SCHEMA ] =================
+const User = mongoose.model('User', new mongoose.Schema({
+    discordId: String,
+    rank: { type: String, default: "None" },
+    xp: { type: Number, default: 0 },
+    level: { type: Number, default: 1 },
+    elo: { type: Number, default: 0 }, // NEW: ELO TRACKING
+    premiumCode: { type: String, default: null },
+    hasUsedFreeRender: { type: Boolean, default: false }
 }));
 
-// ===== SUBMISSIONS =====
-const Submission = mongoose.model("Submission", new mongoose.Schema({
-  id: String,
-  userId: String,
-  link: String,
-  status: { type: String, default: "processing" },
-  createdAt: { type: Date, default: Date.now }
-}));
-
-// ================= RANKS =================
-const RANKS = [
-  { name: "SSS", role: "1488208025859788860", mmr: 2000 },
-  { name: "SS+", role: "1488208185633280041", mmr: 1700 },
-  { name: "SS", role: "1488208281930432602", mmr: 1500 },
-  { name: "S+", role: "1488208494170738793", mmr: 1300 },
-  { name: "S", role: "1488208584142753863", mmr: 1100 },
-  { name: "A", role: "1488208696759685190", mmr: 900 }
-];
-
-async function applyRank(member, mmr) {
-  const rank = [...RANKS].reverse().find(r => mmr >= r.mmr);
-  if (!rank) return;
-
-  await member.roles.remove(RANKS.map(r => r.role)).catch(()=>{});
-  await member.roles.add(rank.role).catch(()=>{});
-}
-
-// ================= CLIENT =================
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+const client = new Client({ 
+    intents: [3276799], 
+    partials: [Partials.Channel, Partials.GuildMember] 
 });
 
-// ================= PANEL =================
-const panel = (t,d,c=0x00ffff) =>
-  new EmbedBuilder()
-    .setTitle(t)
-    .setDescription(d)
-    .setColor(c)
-    .setFooter({ text: "GOD MODE SYSTEM" })
-    .setTimestamp();
+// ================= [ 🛡️ CORE KERNEL SYSTEM ] =================
+const Kernel = {
+    // Advanced Boot Sequence
+    boot: async () => {
+        console.clear();
+        process.stdout.write(colors.magenta.bold("\n  🤖 OMEGA AI CORE v16.0 | ELO ENGINE ENABLED\n\n"));
+        const steps = ["MONGO_DB", "MAIN_LINK", "REVIEW_LINK", "ELO_MODULE"];
+        for (const s of steps) {
+            process.stdout.write(`  ⚙️ Loading ${s.padEnd(15)} `);
+            for(let i=0; i<=100; i+=25) {
+                const bar = "▰".repeat(i/5).magenta + "▱".repeat(20-(i/5)).gray;
+                process.stdout.write(`\r  ⚙️ Loading ${s.padEnd(15)} ${bar} ${i}%`);
+                await new Promise(r => setTimeout(r, 80));
+            }
+            process.stdout.write(colors.green(" [OK]\n"));
+        }
+        console.log(colors.cyan.bold("\n  🎉 SYSTEMS STABILIZED & ONLINE\n"));
+    },
 
-// ================= STARTUP =================
-client.once("ready", async () => {
-  console.clear();
+    // Fuzzy Search Auto-Correct
+    resolve: (input) => {
+        const cmdList = ['quality', 'qualitu', 'submit', 'rankcard', 'serverstats'];
+        let best = null; let min = 2;
+        cmdList.forEach(c => {
+            let dist = Kernel.lev(input, c);
+            if (dist < min) { min = dist; best = c; }
+        });
+        return best;
+    },
 
-  const sleep = ms => new Promise(r=>setTimeout(r,ms));
-  const type = async (t,s=10)=>{for(const c of t){process.stdout.write(c);await sleep(s);}console.log();};
+    lev: (a, b) => {
+        const m = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+        for (let i = 0; i <= a.length; i++) m[0][i] = i;
+        for (let j = 0; j <= b.length; j++) m[j][0] = j;
+        for (let j = 1; j <= b.length; j++) {
+            for (let i = 1; i <= a.length; i++) {
+                const sub = a[i - 1] === b[j - 1] ? 0 : 1;
+                m[j][i] = Math.min(m[j][i - 1] + 1, m[j - 1][i] + 1, m[j - 1][i - 1] + sub);
+            }
+        }
+        return m[b.length][a.length];
+    }
+};
 
-  await type("🔌 Booting GOD CORE...");
-  await sleep(200);
-  await type("⚙️ Injecting modules...");
-  await sleep(200);
+// ================= [ 🚀 MAIN COMMAND HANDLER ] =================
 
-  console.log(`
-        🐦
-      🐦🐦
-    🐦   🐦
-   🐦     🐦
- 🐦  GOD   🐦
-   🐦     🐦
-    🐦   🐦
-      🐦🐦
-        🐦
-  `);
+client.on("messageCreate", async (m) => {
+    if (m.author.bot || m.guildId !== CONFIG.MAIN_GUILD) return;
 
-  await type("🔥 GOD MODE ACTIVATED");
-  await type(`🤖 ${client.user.tag} ONLINE`);
+    // XP Progression
+    const user = await User.findOneAndUpdate({ discordId: m.author.id }, { $inc: { xp: 5 } }, { upsert: true, new: true });
+    if (user.xp >= user.level * 500) {
+        user.level++; await user.save();
+        m.reply(`🧠 **LEVEL_UP:** AI Core reached **Level ${user.level}**!`);
+    }
+
+    if (!m.content.startsWith('!')) return;
+    const cmd = Kernel.resolve(m.content.slice(1).split(' ')[0].toLowerCase());
+    if (!cmd) return;
+
+    switch(cmd) {
+        case "quality":
+        case "qualitu":
+            if (!user.premiumCode && (user.level < 20 || user.hasUsedFreeRender)) 
+                return m.reply("❌ **DENIED:** Reach Level 20 or Boost for 4K Rendering.");
+            
+            const file = m.attachments.first();
+            if (!file?.contentType?.startsWith('video')) return m.reply("⚠️ Upload a video.");
+            
+            const status = await m.reply("⚙️ **UPSCALE:** Processing 4K Lanczos...");
+            const inP = `./in_${m.id}.mp4`, outP = `./out_${m.id}.mp4`;
+            
+            try {
+                fs.writeFileSync(inP, Buffer.from(await (await fetch(file.url)).arrayBuffer()));
+                ffmpeg(inP)
+                    .outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 18", "-preset superfast"])
+                    .on('end', async () => {
+                        await m.author.send({ content: "✅ **4K_RENDER_READY.**", files: [new AttachmentBuilder(outP)] }).catch(()=>{});
+                        status.edit("🟢 **DONE.** Check DMs.");
+                        if (!user.premiumCode) { user.hasUsedFreeRender = true; await user.save(); }
+                        [inP, outP].forEach(p => fs.existsSync(p) && fs.unlinkSync(p));
+                    })
+                    .on('error', () => { status.edit("❌ **FAILURE.**"); if(fs.existsSync(inP)) fs.unlinkSync(inP); })
+                    .save(outP);
+            } catch(e) { status.edit("❌ **ERROR.**"); }
+            break;
+
+        case "rankcard":
+            m.reply(`\`\`\`ansi\n\u001b[1;35m🤖 IDENTITY: ${m.author.username}\u001b[0m\n\u001b[1;30m----------------------------\u001b[0m\nRANK  :: ${user.rank}\nELO   :: \u001b[1;32m${user.elo}\u001b[0m\nLEVEL :: ${user.level}\nXP    :: ${user.xp}\n\u001b[1;30m----------------------------\u001b[0m\n\`\`\``);
+            break;
+
+        case "submit":
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub').setLabel('⟁ UPLOAD DATA').setStyle(ButtonStyle.Danger));
+            m.reply({ content: "🧠 **SYSTEM:** Initializing submission gateway...", components: [row] });
+            break;
+
+        case "serverstats":
+            m.reply(`\`\`\`ansi\n\u001b[1;36m🛰️ CORE_STATS\u001b[0m\nPING   :: ${client.ws.ping}ms\nSTATUS :: OPTIMIZED\n\`\`\``);
+            break;
+    }
 });
 
-// ================= VIDEO =================
-async function processVideo(link, id, userId) {
+// ================= [ ⚡ INTERACTION HANDLER ] =================
 
-  console.log("🚀 Sending to dashboard...");
+client.on('interactionCreate', async (i) => {
+    // 1. Submit Modal Trigger
+    if (i.isButton() && i.customId === 'sub') {
+        const modal = new ModalBuilder().setCustomId('m').setTitle('҂ DATA_INPUT');
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('u').setLabel('LINK').setStyle(1).setRequired(true)));
+        return await i.showModal(modal);
+    }
 
-  const sub = await Submission.create({ id, userId, link });
+    // 2. Transmit to Review Guild
+    if (i.isModalSubmit() && i.customId === 'm') {
+        const url = i.fields.getTextInputValue('u');
+        const chan = client.guilds.cache.get(CONFIG.REVIEW_GUILD)?.channels.cache.get(CONFIG.REVIEW_CHAN);
+        if (!chan) return i.reply({ content: "❌ Review channel offline.", ephemeral: true });
 
-  try {
-    const guild = await client.guilds.fetch(REVIEW_GUILD);
-    const channel = await guild.channels.fetch(REVIEW_CHANNEL);
+        const r1 = new ActionRowBuilder().addComponents(Object.keys(CONFIG.RANKS).slice(0,3).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Primary)));
+        const r2 = new ActionRowBuilder().addComponents(Object.keys(CONFIG.RANKS).slice(3).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Primary)));
+        
+        await chan.send({ content: `🧠 **NEW SUBMISSION:** <@${i.user.id}>\nDATA: ${url}`, components: [r1, r2] });
+        await i.reply({ content: "✅ **SYNCED.** Staff are reviewing.", ephemeral: true });
+    }
 
-    if (!channel) return console.log("❌ Channel not found");
+    // 3. Staff Logic (Role + ELO Award)
+    if (i.isButton() && i.customId.startsWith('sel_')) {
+        const [ , rankName, uid] = i.customId.split('_');
+        const rankData = CONFIG.RANKS[rankName];
+        const mainGuild = client.guilds.cache.get(CONFIG.MAIN_GUILD);
+        const member = await mainGuild?.members.fetch(uid).catch(() => null);
 
-    const buttons = RANKS.map(r =>
-      new ButtonBuilder()
-        .setCustomId(`rank_${r.name}_${userId}`)
-        .setLabel(r.name)
-        .setStyle(ButtonStyle.Primary)
-    );
+        // Update Database (Rank + Add ELO)
+        const updatedUser = await User.findOneAndUpdate(
+            { discordId: uid }, 
+            { rank: rankName, $inc: { elo: rankData.elo } }, 
+            { upsert: true, new: true }
+        );
 
-    const row1 = new ActionRowBuilder().addComponents(buttons.slice(0,5));
-    const row2 = new ActionRowBuilder().addComponents(
-      ...buttons.slice(5),
-      new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
-    );
+        // Update Roles in Main Server
+        if (member) {
+            const roleIds = Object.values(CONFIG.RANKS).map(r => r.id);
+            await member.roles.remove(roleIds).catch(() => {});
+            await member.roles.add(rankData.id).catch(() => {});
+            member.send(`✅ **RANK_UP:** Assigned **${rankName}**. You earned **+${rankData.elo} ELO**!`).catch(()=>{});
+        }
 
-    await channel.send({
-      embeds:[panel("🎬 NEW SUBMISSION", `<@${userId}>\n${link}`)],
-      components:[row1,row2]
-    });
+        await i.update({ content: `✅ **LOCKED:** <@${uid}> set to **${rankName}** (+${rankData.elo} ELO). Total: **${updatedUser.elo}**`, components: [] });
+    }
+});
 
-    console.log("✅ SENT TO DASHBOARD");
-
-  } catch (err) {
-    console.log("❌ ERROR:", err);
-  }
-
-  // KEEP YOUR VIDEO PROCESSING (background)
-  ffmpeg(link)
-    .on("end", async ()=>{ sub.status="done"; await sub.save(); })
-    .on("error", async ()=>{ sub.status="failed"; await sub.save(); })
-    .save(`out_${id}.mp4`);
-}
-
-// ================= COMMANDS =================
-client.on("messageCreate", async msg => {
-  if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
-
-  const cmd = msg.content.slice(1).toLowerCase();
-
-  const user = await User.findOneAndUpdate(
-    { userId: msg.author.id }, {}, { upsert:true,new:true }
-  );
-
-  if (cmd === "submit") {
-    return msg.reply({
-      embeds:[panel("🎬 SUBMIT","Click below")],
-      components:[new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("submit").setLabel("Submit").setStyle(ButtonStyle.Primary)
-      )]
-    });
-  }
-
-  if (cmd === "boost") {
-    user.coins += 100;
-    user.mmr += 25;
-
-    const code = crypto.randomBytes(3).toString("hex").toUpperCase();
-    user.qualityCode = code;
-
-    await user.save();
-
+// ================= [ 🛰️ BOOT SEQUENCE ] =================
+async function boot() {
+    await Kernel.boot();
     try {
-      await msg.author.send(`🔥 QUALITY CODE\n${code}`);
-    } catch {}
+        await mongoose.connect(process.env.MONGO_URI);
+        const app = express(); app.get('/', (r, s) => s.send('ACTIVE')); app.listen(process.env.PORT || 3000);
+        client.once('ready', () => client.user.setActivity(`ELO SYNC | v16`, { type: 3 }));
+        await client.login(process.env.DISCORD_TOKEN);
+    } catch (e) { console.log(e); }
+}
 
-    return msg.reply({embeds:[panel("🚀 BOOSTED","+MMR + coins\n📩 Code sent")]});
-  }
-
-  if (cmd === "quality") {
-    return msg.reply({embeds:[panel("📩 CHECK DMS","Send your code")]})
-      .then(m => setTimeout(()=>m.delete().catch(()=>{}),10000));
-  }
-
-  if (cmd === "profile") {
-    return msg.reply({embeds:[panel("👤 PROFILE",`MMR: ${user.mmr}\nCoins: ${user.coins}`)]});
-  }
-});
-
-// ================= DM CODE =================
-client.on("messageCreate", async msg => {
-  if (msg.guild || msg.author.bot) return;
-
-  const user = await User.findOne({ userId: msg.author.id });
-  if (!user || !user.qualityCode) return;
-
-  if (msg.content.toUpperCase() === user.qualityCode) {
-    user.qualityUnlocked = true;
-    user.qualityCode = null;
-    await user.save();
-
-    const reply = await msg.reply("✅ QUALITY UNLOCKED");
-
-    setTimeout(()=>{
-      msg.delete().catch(()=>{});
-      reply.delete().catch(()=>{});
-    },10000);
-  }
-});
-
-// ================= INTERACTIONS =================
-client.on("interactionCreate", async i => {
-
-  if (i.isButton() && i.customId === "submit") {
-    const modal = new ModalBuilder().setCustomId("m").setTitle("Submit");
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("l")
-          .setLabel("Link")
-          .setStyle(TextInputStyle.Short)
-      )
-    );
-
-    return i.showModal(modal);
-  }
-
-  if (i.isModalSubmit()) {
-    const link = i.fields.getTextInputValue("l");
-
-    processVideo(link, crypto.randomBytes(4).toString("hex"), i.user.id);
-
-    return i.reply({
-      embeds:[panel("📨 SENT","Sent to dashboard")],
-      ephemeral:true
-    });
-  }
-
-  // ===== RANK =====
-  if (i.isButton() && i.customId.startsWith("rank_")) {
-    const [, rankName, userId] = i.customId.split("_");
-    const rank = RANKS.find(r => r.name === rankName);
-
-    const user = await User.findOneAndUpdate(
-      { userId }, {}, { upsert:true,new:true }
-    );
-
-    user.mmr = rank.mmr;
-    await user.save();
-
-    const member = await i.guild.members.fetch(userId);
-    await applyRank(member, user.mmr);
-
-    return i.reply({embeds:[panel("✅ RANK SET",rank.name)]});
-  }
-
-  // ===== MMR =====
-  if (i.isButton() && i.customId.startsWith("mmr_")) {
-    const [, type, userId] = i.customId.split("_");
-
-    const user = await User.findOne({ userId });
-
-    if (type === "up") user.mmr += 25;
-    if (type === "down") user.mmr -= 25;
-
-    await user.save();
-
-    const member = await i.guild.members.fetch(userId);
-    await applyRank(member, user.mmr);
-
-    return i.reply({embeds:[panel("📊 MMR UPDATED",`${user.mmr}`)]});
-  }
-});
-
-// ================= START =================
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 API running");
-});
-
-client.login(process.env.DISCORD_TOKEN);
+boot();
