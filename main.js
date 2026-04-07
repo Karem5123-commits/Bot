@@ -24,8 +24,8 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ================= CONFIG =================
 const PREFIX = "!";
-const REVIEW_CHANNEL = process.env.REVIEW_CHANNEL;
-const REVIEW_GUILD = "1488868987805892730"; // ✅ FORCED SERVER
+const REVIEW_GUILD = "1488868987805892730";
+const REVIEW_CHANNEL = "1489069664414859326";
 
 // ================= EXPRESS =================
 const app = express();
@@ -71,6 +71,7 @@ const RANKS = [
 async function applyRank(member, mmr) {
   const rank = [...RANKS].reverse().find(r => mmr >= r.mmr);
   if (!rank) return;
+
   await member.roles.remove(RANKS.map(r => r.role)).catch(()=>{});
   await member.roles.add(rank.role).catch(()=>{});
 }
@@ -87,11 +88,17 @@ const client = new Client({
 
 // ================= PANEL =================
 const panel = (t,d,c=0x00ffff) =>
-  new EmbedBuilder().setTitle(t).setDescription(d).setColor(c).setTimestamp();
+  new EmbedBuilder()
+    .setTitle(t)
+    .setDescription(d)
+    .setColor(c)
+    .setFooter({ text: "GOD MODE SYSTEM" })
+    .setTimestamp();
 
 // ================= STARTUP =================
 client.once("ready", async () => {
   console.clear();
+
   const sleep = ms => new Promise(r=>setTimeout(r,ms));
   const type = async (t,s=10)=>{for(const c of t){process.stdout.write(c);await sleep(s);}console.log();};
 
@@ -118,32 +125,43 @@ client.once("ready", async () => {
 
 // ================= VIDEO =================
 async function processVideo(link, id, userId) {
+
+  console.log("🚀 Sending to dashboard...");
+
   const sub = await Submission.create({ id, userId, link });
 
-  // ✅ ALWAYS SEND TO YOUR SERVER
-  const guild = await client.guilds.fetch(REVIEW_GUILD);
-  const channel = await guild.channels.fetch(REVIEW_CHANNEL);
+  try {
+    const guild = await client.guilds.fetch(REVIEW_GUILD);
+    const channel = await guild.channels.fetch(REVIEW_CHANNEL);
 
-  const buttons = RANKS.map(r =>
-    new ButtonBuilder()
-      .setCustomId(`rank_${r.name}_${userId}`)
-      .setLabel(r.name)
-      .setStyle(ButtonStyle.Primary)
-  );
+    if (!channel) return console.log("❌ Channel not found");
 
-  const row1 = new ActionRowBuilder().addComponents(buttons.slice(0,5));
-  const row2 = new ActionRowBuilder().addComponents(
-    ...buttons.slice(5),
-    new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
-  );
+    const buttons = RANKS.map(r =>
+      new ButtonBuilder()
+        .setCustomId(`rank_${r.name}_${userId}`)
+        .setLabel(r.name)
+        .setStyle(ButtonStyle.Primary)
+    );
 
-  await channel.send({
-    embeds:[panel("🎬 NEW SUBMISSION", `<@${userId}>\n${link}`)],
-    components:[row1,row2]
-  });
+    const row1 = new ActionRowBuilder().addComponents(buttons.slice(0,5));
+    const row2 = new ActionRowBuilder().addComponents(
+      ...buttons.slice(5),
+      new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
+    );
 
-  // background processing (kept)
+    await channel.send({
+      embeds:[panel("🎬 NEW SUBMISSION", `<@${userId}>\n${link}`)],
+      components:[row1,row2]
+    });
+
+    console.log("✅ SENT TO DASHBOARD");
+
+  } catch (err) {
+    console.log("❌ ERROR:", err);
+  }
+
+  // KEEP YOUR VIDEO PROCESSING (background)
   ffmpeg(link)
     .on("end", async ()=>{ sub.status="done"; await sub.save(); })
     .on("error", async ()=>{ sub.status="failed"; await sub.save(); })
@@ -172,14 +190,47 @@ client.on("messageCreate", async msg => {
   if (cmd === "boost") {
     user.coins += 100;
     user.mmr += 25;
-    user.qualityCode = crypto.randomBytes(3).toString("hex").toUpperCase();
+
+    const code = crypto.randomBytes(3).toString("hex").toUpperCase();
+    user.qualityCode = code;
+
     await user.save();
 
     try {
-      await msg.author.send(`Code: ${user.qualityCode}`);
+      await msg.author.send(`🔥 QUALITY CODE\n${code}`);
     } catch {}
 
-    return msg.reply({embeds:[panel("BOOSTED","+MMR + coins")]});
+    return msg.reply({embeds:[panel("🚀 BOOSTED","+MMR + coins\n📩 Code sent")]});
+  }
+
+  if (cmd === "quality") {
+    return msg.reply({embeds:[panel("📩 CHECK DMS","Send your code")]})
+      .then(m => setTimeout(()=>m.delete().catch(()=>{}),10000));
+  }
+
+  if (cmd === "profile") {
+    return msg.reply({embeds:[panel("👤 PROFILE",`MMR: ${user.mmr}\nCoins: ${user.coins}`)]});
+  }
+});
+
+// ================= DM CODE =================
+client.on("messageCreate", async msg => {
+  if (msg.guild || msg.author.bot) return;
+
+  const user = await User.findOne({ userId: msg.author.id });
+  if (!user || !user.qualityCode) return;
+
+  if (msg.content.toUpperCase() === user.qualityCode) {
+    user.qualityUnlocked = true;
+    user.qualityCode = null;
+    await user.save();
+
+    const reply = await msg.reply("✅ QUALITY UNLOCKED");
+
+    setTimeout(()=>{
+      msg.delete().catch(()=>{});
+      reply.delete().catch(()=>{});
+    },10000);
   }
 });
 
@@ -188,17 +239,28 @@ client.on("interactionCreate", async i => {
 
   if (i.isButton() && i.customId === "submit") {
     const modal = new ModalBuilder().setCustomId("m").setTitle("Submit");
-    modal.addComponents(new ActionRowBuilder().addComponents(
-      new TextInputBuilder().setCustomId("l").setLabel("Link").setStyle(TextInputStyle.Short)
-    ));
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("l")
+          .setLabel("Link")
+          .setStyle(TextInputStyle.Short)
+      )
+    );
+
     return i.showModal(modal);
   }
 
   if (i.isModalSubmit()) {
     const link = i.fields.getTextInputValue("l");
+
     processVideo(link, crypto.randomBytes(4).toString("hex"), i.user.id);
 
-    return i.reply({embeds:[panel("📨 SENT","Sent for review")],ephemeral:true});
+    return i.reply({
+      embeds:[panel("📨 SENT","Sent to dashboard")],
+      ephemeral:true
+    });
   }
 
   // ===== RANK =====
@@ -213,12 +275,10 @@ client.on("interactionCreate", async i => {
     user.mmr = rank.mmr;
     await user.save();
 
-    const guild = await client.guilds.fetch(REVIEW_GUILD);
-    const member = await guild.members.fetch(userId);
-
+    const member = await i.guild.members.fetch(userId);
     await applyRank(member, user.mmr);
 
-    return i.reply({embeds:[panel("RANK SET",`${rank.name}`)]});
+    return i.reply({embeds:[panel("✅ RANK SET",rank.name)]});
   }
 
   // ===== MMR =====
@@ -232,18 +292,16 @@ client.on("interactionCreate", async i => {
 
     await user.save();
 
-    const guild = await client.guilds.fetch(REVIEW_GUILD);
-    const member = await guild.members.fetch(userId);
-
+    const member = await i.guild.members.fetch(userId);
     await applyRank(member, user.mmr);
 
-    return i.reply({embeds:[panel("MMR UPDATED",`${user.mmr}`)]});
+    return i.reply({embeds:[panel("📊 MMR UPDATED",`${user.mmr}`)]});
   }
 });
 
 // ================= START =================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("API running");
+  console.log("🌐 API running");
 });
 
 client.login(process.env.DISCORD_TOKEN);
