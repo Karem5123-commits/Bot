@@ -1,40 +1,20 @@
 {
-  "name": "god-mode-discord-bot",
-  "version": "3.1.0",
-  "description": "High-end competitive Discord bot with MMR ranking, video processing, boost system, and staff review pipeline",
+  "name": "omega-kernel-v16",
+  "version": "16.0.0",
+  "description": "Clean-Refactored Dual-Guild AI Kernel with ELO System",
   "main": "main.js",
-  "type": "module",
-
   "scripts": {
-    "start": "node main.js",
-    "dev": "node --watch main.js"
+    "start": "node main.js"
   },
-
-  "engines": {
-    "node": ">=18.0.0"
-  },
-
   "dependencies": {
-    "discord.js": "^14.14.1",
+    "colors": "^1.4.0",
+    "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "mongoose": "^8.5.1",
-    "cors": "^2.8.5",
-    "fluent-ffmpeg": "^2.1.2",
-    "ffmpeg-static": "^5.2.0"
+    "fluent-ffmpeg": "^2.1.3",
+    "mongoose": "^8.3.0"
   },
-
-  "keywords": [
-    "discord",
-    "bot",
-    "mmr",
-    "ranking",
-    "video-processing",
-    "ffmpeg",
-    "economy",
-    "leaderboard"
-  ],
-
-  "author": "You",
-  "license": "MIT"
+  "engines": {
+    "node": ">=18.x"
+  }
 }
