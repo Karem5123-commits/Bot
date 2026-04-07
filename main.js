@@ -7,7 +7,6 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  PermissionsBitField,
   EmbedBuilder
 } from "discord.js";
 
@@ -26,8 +25,6 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 // ================= CONFIG =================
 const PREFIX = "!";
 const REVIEW_CHANNEL = process.env.REVIEW_CHANNEL;
-const LOG_CHANNEL = process.env.LOG_CHANNEL;
-const OWNER_ID = process.env.OWNER_ID;
 
 // ================= EXPRESS =================
 const app = express();
@@ -41,13 +38,12 @@ await mongoose.connect(process.env.MONGO_URI);
 
 // ===== USER =====
 const User = mongoose.model("User", new mongoose.Schema({
-  userId: { type: String, index: true },
-  mmr: { type: Number, default: 900, index: true },
+  userId: String,
+  mmr: { type: Number, default: 900 },
   coins: { type: Number, default: 1000 },
   lastBoost: { type: Number, default: 0 },
   boostStreak: { type: Number, default: 0 },
   peakMMR: { type: Number, default: 900 },
-
   qualityCode: String,
   qualityUnlocked: { type: Boolean, default: false }
 }));
@@ -71,13 +67,9 @@ const RANKS = [
   { name: "A", role: "1488208696759685190", mmr: 900 }
 ];
 
-function getRank(mmr) {
-  return [...RANKS].reverse().find(r => mmr >= r.mmr) || RANKS[RANKS.length - 1];
-}
-
 async function applyRank(member, mmr) {
-  const rank = getRank(mmr);
-  if (member.roles.cache.has(rank.role)) return;
+  const rank = [...RANKS].reverse().find(r => mmr >= r.mmr);
+  if (!rank) return;
   await member.roles.remove(RANKS.map(r => r.role)).catch(()=>{});
   await member.roles.add(rank.role).catch(()=>{});
 }
@@ -92,62 +84,20 @@ const client = new Client({
   ]
 });
 
-// ================= PANEL HELPER =================
-function panel(title, desc, color = 0x00ffff) {
-  return new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(desc)
-    .setColor(color)
-    .setFooter({ text: "GOD MODE SYSTEM" })
-    .setTimestamp();
-}
+// ================= PANEL =================
+const panel = (t,d,c=0x00ffff) =>
+  new EmbedBuilder().setTitle(t).setDescription(d).setColor(c).setTimestamp();
 
-// ================= STARTUP =================
+// ================= STARTUP (YOUR BIRD KEPT) =================
 client.once("ready", async () => {
   console.clear();
-
-  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-
-  const type = async (text, speed = 10) => {
-    for (const char of text) {
-      process.stdout.write(char);
-      await sleep(speed);
-    }
-    process.stdout.write("\n");
-  };
-
-  const progressBar = async () => {
-    let bar = "";
-    for (let i = 0; i <= 100; i += 5) {
-      bar = "█".repeat(i / 5) + "░".repeat(20 - i / 5);
-      process.stdout.write(`\r⚡ Loading: [${bar}] ${i}%`);
-      await sleep(60);
-    }
-    process.stdout.write("\n");
-  };
+  const sleep = ms => new Promise(r=>setTimeout(r,ms));
+  const type = async (t,s=10)=>{for(const c of t){process.stdout.write(c);await sleep(s);}console.log();};
 
   await type("🔌 Booting GOD CORE...");
   await sleep(200);
-
   await type("⚙️ Injecting modules...");
   await sleep(200);
-
-  await progressBar();
-
-  await type("📡 Connecting to Discord Gateway...");
-  await sleep(300);
-
-  await type("🧠 Syncing neural MMR database...");
-  await sleep(300);
-
-  await type("🎬 Spinning up video engine...");
-  await sleep(300);
-
-  await type("🔐 Running security protocols...");
-  await sleep(300);
-
-  await type("🐦 Initializing Falcon AI...");
-  await sleep(400);
 
   console.log(`
         🐦
@@ -161,57 +111,40 @@ client.once("ready", async () => {
         🐦
   `);
 
-  await sleep(300);
-
-  console.log(`
-██████╗  ██████╗ ██████╗ 
-██╔══██╗██╔═══██╗██╔══██╗
-██████╔╝██║   ██║██████╔╝
-██╔═══╝ ██║   ██║██╔══██╗
-██║     ╚██████╔╝██║  ██║
-╚═╝      ╚═════╝ ╚═╝  ╚═╝
-`);
-
-  await type("🔥 GOD MODE ACTIVATED", 20);
-  await type(`🤖 ${client.user.tag} ONLINE`, 20);
-
-  console.log("\n🚀 SYSTEM STATUS: FULLY OPERATIONAL\n");
+  await type("🔥 GOD MODE ACTIVATED");
+  await type(`🤖 ${client.user.tag} ONLINE`);
 });
+
 // ================= VIDEO =================
 async function processVideo(link, id, userId) {
-  const output = `out_${id}.mp4`;
   const sub = await Submission.create({ id, userId, link });
 
-  const user = await User.findOne({ userId });
+  const channel = await client.channels.fetch(REVIEW_CHANNEL);
 
-  const filters = user?.qualityUnlocked
-    ? ["scale=1920:1080", "unsharp=5:5:1.0"]
-    : ["scale=1280:720"];
+  const buttons = RANKS.map(r =>
+    new ButtonBuilder()
+      .setCustomId(`rank_${r.name}_${userId}`)
+      .setLabel(r.name)
+      .setStyle(ButtonStyle.Primary)
+  );
 
-  try {
-    await new Promise((res, rej) => {
-      ffmpeg(link)
-        .videoFilters(filters)
-        .on("end", res)
-        .on("error", rej)
-        .save(output);
-    });
+  const row1 = new ActionRowBuilder().addComponents(buttons.slice(0,5));
+  const row2 = new ActionRowBuilder().addComponents(
+    ...buttons.slice(5),
+    new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
+  );
 
-    sub.status = "done";
-    await sub.save();
+  await channel.send({
+    embeds:[panel("🎬 NEW SUBMISSION", `<@${userId}>\n${link}`)],
+    components:[row1,row2]
+  });
 
-    const channel = await client.channels.fetch(REVIEW_CHANNEL);
-
-    await channel.send({
-      embeds: [
-        panel("🎬 NEW SUBMISSION", `<@${userId}>\n[View Clip](${link})`)
-      ]
-    });
-
-  } catch {
-    sub.status = "failed";
-    await sub.save();
-  }
+  // background processing
+  ffmpeg(link)
+    .on("end", async ()=>{ sub.status="done"; await sub.save(); })
+    .on("error", async ()=>{ sub.status="failed"; await sub.save(); })
+    .save(`out_${id}.mp4`);
 }
 
 // ================= COMMANDS =================
@@ -221,151 +154,89 @@ client.on("messageCreate", async msg => {
   const cmd = msg.content.slice(1).toLowerCase();
 
   const user = await User.findOneAndUpdate(
-    { userId: msg.author.id },
-    {},
-    { upsert: true, new: true }
+    { userId: msg.author.id }, {}, { upsert:true,new:true }
   );
 
-  // ===== SUBMIT =====
   if (cmd === "submit") {
     return msg.reply({
-      embeds: [panel("🎬 SUBMIT CLIP", "Click below")],
-      components: [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("open_submit_modal")
-            .setLabel("Submit")
-            .setStyle(ButtonStyle.Primary)
-        )
-      ]
+      embeds:[panel("🎬 SUBMIT","Click below")],
+      components:[new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("submit").setLabel("Submit").setStyle(ButtonStyle.Primary)
+      )]
     });
   }
 
-  // ===== BOOST =====
   if (cmd === "boost") {
-    const now = Date.now();
-    if (now - user.lastBoost < 3600000)
-      return msg.reply({ embeds: [panel("⏳ WAIT", "1 hour cooldown", 0xff0000)] });
-
-    user.boostStreak++;
-    user.lastBoost = now;
-
-    const reward = Math.floor(50 * Math.pow(1.1, user.boostStreak));
-    user.coins += reward;
+    user.coins += 100;
     user.mmr += 25;
-
-    // QUALITY CODE
-    const code = crypto.randomBytes(3).toString("hex").toUpperCase();
-    user.qualityCode = code;
-
+    user.qualityCode = crypto.randomBytes(3).toString("hex").toUpperCase();
     await user.save();
 
     try {
-      await msg.author.send(
-        `🔥 QUALITY CODE\nUse !quality and send:\n${code}`
-      );
+      await msg.author.send(`Code: ${user.qualityCode}`);
     } catch {}
 
-    return msg.reply({
-      embeds: [panel("🚀 BOOSTED", `+${reward} coins\n+25 MMR\n📩 Code sent to DMs`)]
-    });
-  }
-
-  // ===== QUALITY =====
-  if (cmd === "quality") {
-    return msg.reply({
-      embeds: [panel("📩 CHECK DMS", "Send your code in DM")]
-    }).then(m => setTimeout(() => m.delete().catch(()=>{}), 10000));
-  }
-
-  // ===== PROFILE =====
-  if (cmd === "profile") {
-    return msg.reply({
-      embeds: [panel("👤 PROFILE", `MMR: ${user.mmr}\nCoins: ${user.coins}`)]
-    });
-  }
-});
-
-// ================= DM CODE SYSTEM =================
-client.on("messageCreate", async msg => {
-  if (msg.guild || msg.author.bot) return;
-
-  const user = await User.findOne({ userId: msg.author.id });
-  if (!user || !user.qualityCode) return;
-
-  if (msg.content.toUpperCase() === user.qualityCode) {
-    user.qualityUnlocked = true;
-    user.qualityCode = null;
-    await user.save();
-
-    const reply = await msg.reply("✅ QUALITY UNLOCKED");
-
-    setTimeout(() => {
-      msg.delete().catch(()=>{});
-      reply.delete().catch(()=>{});
-    }, 10000);
+    return msg.reply({embeds:[panel("BOOSTED","+MMR + coins")]});
   }
 });
 
 // ================= INTERACTIONS =================
 client.on("interactionCreate", async i => {
-  if (i.isButton() && i.customId === "open_submit_modal") {
-    const modal = new ModalBuilder()
-      .setCustomId("submit_modal")
-      .setTitle("Submit");
 
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId("link")
-          .setLabel("Video URL")
-          .setStyle(TextInputStyle.Short)
-      )
-    );
-
+  if (i.isButton() && i.customId === "submit") {
+    const modal = new ModalBuilder().setCustomId("m").setTitle("Submit");
+    modal.addComponents(new ActionRowBuilder().addComponents(
+      new TextInputBuilder().setCustomId("l").setLabel("Link").setStyle(TextInputStyle.Short)
+    ));
     return i.showModal(modal);
   }
 
   if (i.isModalSubmit()) {
-    const link = i.fields.getTextInputValue("link");
-    const id = crypto.randomBytes(4).toString("hex");
+    const link = i.fields.getTextInputValue("l");
+    processVideo(link, crypto.randomBytes(4).toString("hex"), i.user.id);
 
-    processVideo(link, id, i.user.id);
+    return i.reply({embeds:[panel("📨 SENT","Sent for review")],ephemeral:true});
+  }
 
-    return i.reply({
-      embeds: [panel("🚀 PROCESSING", "Your clip is being processed")],
-      ephemeral: true
-    });
+  // ===== RANK =====
+  if (i.isButton() && i.customId.startsWith("rank_")) {
+    const [, rankName, userId] = i.customId.split("_");
+    const rank = RANKS.find(r => r.name === rankName);
+
+    const user = await User.findOneAndUpdate(
+      { userId }, {}, { upsert:true,new:true }
+    );
+
+    user.mmr = rank.mmr;
+    await user.save();
+
+    const member = await i.guild.members.fetch(userId);
+    await applyRank(member, user.mmr);
+
+    return i.reply({embeds:[panel("RANK SET",`${rank.name}`)]});
+  }
+
+  // ===== MMR =====
+  if (i.isButton() && i.customId.startsWith("mmr_")) {
+    const [, type, userId] = i.customId.split("_");
+
+    const user = await User.findOne({ userId });
+
+    if (type === "up") user.mmr += 25;
+    if (type === "down") user.mmr -= 25;
+
+    await user.save();
+
+    const member = await i.guild.members.fetch(userId);
+    await applyRank(member, user.mmr);
+
+    return i.reply({embeds:[panel("MMR UPDATED",`${user.mmr}`)]});
   }
 });
 
-// ================= API =================
-app.get("/api/status", (_, res) => res.json({ online: client.isReady() }));
-
-app.get("/api/leaderboard", async (_, res) => {
-  const users = await User.find().sort({ mmr: -1 }).limit(50);
-  res.json(users);
-});
-
-app.get("/api/submissions", async (_, res) => {
-  const subs = await Submission.find().sort({ _id: -1 }).limit(20);
-  res.json(subs);
-});
-
-// ================= CLEANUP =================
-setInterval(() => {
-  fs.readdirSync(".")
-    .filter(f => f.startsWith("out_"))
-    .forEach(f => {
-      const stat = fs.statSync(f);
-      if (Date.now() - stat.mtimeMs > 1800000)
-        fs.unlinkSync(f);
-    });
-}, 3600000);
-
 // ================= START =================
 app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 API running");
+  console.log("API running");
 });
 
 client.login(process.env.DISCORD_TOKEN);
