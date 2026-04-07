@@ -30,8 +30,7 @@ const OWNER_ID = process.env.OWNER_ID;
 
 // ================= EXPRESS =================
 const app = express();
-
-app.use(cors({ origin: "*"}));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 app.get("/", (_, res) => res.send("🔥 GOD MODE API ONLINE"));
@@ -58,7 +57,7 @@ const Submission = mongoose.model("Submission", new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 }));
 
-// ===== PREMIUM CODE =====
+// ===== PREMIUM CODES =====
 const PremiumCode = mongoose.model("PremiumCode", new mongoose.Schema({
   code: String,
   used: { type: Boolean, default: false },
@@ -77,7 +76,7 @@ const RANKS = [
 ];
 
 function getRank(mmr) {
-  return RANKS.reverse().find(r => mmr >= r.mmr) || RANKS[RANKS.length - 1];
+  return [...RANKS].reverse().find(r => mmr >= r.mmr) || RANKS[RANKS.length - 1];
 }
 
 async function applyRank(member, mmr) {
@@ -93,15 +92,18 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    client.once("ready", async () => {
+    GatewayIntentBits.GuildMembers
+  ]
+});
+
+// ================= STARTUP ANIMATION =================
+client.once("ready", async () => {
   console.clear();
 
   const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 
   const typeLine = async (text, delay = 15) => {
-    let line = "";
     for (const char of text) {
-      line += char;
       process.stdout.write(char);
       await sleep(delay);
     }
@@ -145,10 +147,16 @@ const client = new Client({
 `);
 });
 
+// ================= AUTO ROLE =================
+client.on("guildMemberAdd", async member => {
+  const user = await User.findOne({ userId: member.id });
+  if (!user) return;
+  applyRank(member, user.mmr);
+});
+
 // ================= VIDEO =================
 async function processVideo(link, id, userId) {
   const output = `out_${id}.mp4`;
-
   const sub = await Submission.create({ id, userId, link });
 
   try {
@@ -205,7 +213,6 @@ client.on("messageCreate", async msg => {
     { upsert: true, new: true }
   );
 
-  // ===== CODE =====
   if (cmd === "code") {
     if (msg.author.id !== OWNER_ID) return msg.reply("Owner only");
 
@@ -215,7 +222,6 @@ client.on("messageCreate", async msg => {
     return msg.reply(`🔥 CODE: ${code}`);
   }
 
-  // ===== SUBMIT =====
   if (cmd === "submit") {
     return msg.reply({
       content: "🎬 Submit clip",
@@ -230,7 +236,6 @@ client.on("messageCreate", async msg => {
     });
   }
 
-  // ===== BOOST =====
   if (cmd === "boost") {
     const now = Date.now();
     if (now - user.lastBoost < 3600000)
@@ -290,7 +295,7 @@ client.on("interactionCreate", async i => {
 });
 
 // ================= API =================
-app.get("/api/status", (_, res) => res.json({ online: true }));
+app.get("/api/status", (_, res) => res.json({ online: client.isReady() }));
 
 app.get("/api/leaderboard", async (_, res) => {
   const users = await User.find().sort({ mmr: -1 }).limit(50);
@@ -300,20 +305,6 @@ app.get("/api/leaderboard", async (_, res) => {
 app.get("/api/submissions", async (_, res) => {
   const subs = await Submission.find().sort({ _id: -1 }).limit(20);
   res.json(subs);
-});
-
-app.post("/api/redeem", async (req, res) => {
-  const { code, userId } = req.body;
-
-  const found = await PremiumCode.findOne({ code, used: false });
-
-  if (!found) return res.json({ success: false });
-
-  found.used = true;
-  found.usedBy = userId;
-  await found.save();
-
-  res.json({ success: true });
 });
 
 // ================= CLEANUP =================
@@ -328,5 +319,8 @@ setInterval(() => {
 }, 3600000);
 
 // ================= START =================
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("🌐 API running");
+});
+
 client.login(process.env.DISCORD_TOKEN);
