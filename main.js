@@ -1,266 +1,318 @@
 import {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  EmbedBuilder,
-  PermissionsBitField,
-  ActivityType
+  Client, GatewayIntentBits, EmbedBuilder,
+  ActionRowBuilder, ButtonBuilder, ButtonStyle,
+  ModalBuilder, TextInputBuilder, TextInputStyle,
+  PermissionsBitField, REST, Routes, SlashCommandBuilder
 } from "discord.js";
 
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import express from "express";
 import crypto from "crypto";
-import fs from "fs/promises";
-import fsSync from "fs";
-import axios from "axios";
+import fs from "fs";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
-import ffprobePath from "ffprobe-static";
-import cors from "cors";
+import ytdlp from "yt-dlp-exec";
 
 dotenv.config();
-
-// ================= FAILSAFE =================
-process.on("uncaughtException", e => console.error("💥", e));
-process.on("unhandledRejection", e => console.error("💥", e));
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ================= CONFIG =================
-const PREFIX = "!";
-const TEMP_DIR = "./temp";
-const active = new Set();
-
-ffmpeg.setFfmpegPath(ffmpegPath);
-ffmpeg.setFfprobePath(ffprobePath.path);
-
-await fs.mkdir(TEMP_DIR, { recursive: true });
+const RANKS = [
+  { name: "SSS", role: "1488208025859788860", mmr: 2000 },
+  { name: "SS+", role: "1488208185633280041", mmr: 1700 },
+  { name: "SS", role: "1488208281930432602", mmr: 1500 },
+  { name: "S+", role: "1488208494170738793", mmr: 1300 },
+  { name: "S", role: "1488208584142753863", mmr: 1100 },
+  { name: "A", role: "1488208696759685190", mmr: 900 }
+];
 
 // ================= DB =================
 await mongoose.connect(process.env.MONGO_URI);
 
 const userSchema = new mongoose.Schema({
-  userId: { type: String, unique: true },
+  userId: { type: String, index: true },
   username: String,
-  mmr: { type: Number, default: 1000 },
-  warnings: { type: Number, default: 0 },
-  bans: { type: Number, default: 0 }
+  mmr: { type: Number, default: 900, index: true },
+  coins: { type: Number, default: 1000 },
+  boostStreak: { type: Number, default: 0 },
+  lastBoost: { type: Number, default: 0 },
+  peakMMR: { type: Number, default: 900 }
 });
 
-const configSchema = new mongoose.Schema({
-  guildId: String,
-  disabledCommands: [String]
+const submissionSchema = new mongoose.Schema({
+  id: String,
+  userId: String,
+  link: String,
+  status: String,
+  file: String
 });
 
 const User = mongoose.model("User", userSchema);
-const Config = mongoose.model("Config", configSchema);
+const Submission = mongoose.model("Submission", submissionSchema);
 
-// ================= DISCORD =================
+// ================= CLIENT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ],
-  partials: [Partials.Channel]
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
-// ================= HELPERS =================
-function isDisabled(guildId, cmd) {
-  return Config.findOne({ guildId }).then(c => c?.disabledCommands?.includes(cmd));
+// ================= QUEUE =================
+const queue = [];
+let processing = false;
+
+async function processQueue() {
+  if (processing || queue.length === 0) return;
+  processing = true;
+
+  const sub = queue.shift();
+  await processVideo(sub);
+
+  processing = false;
+  processQueue();
 }
 
-// ================= DOWNLOAD =================
-const downloadVideo = async (url, output) => {
-  if (!url.startsWith("http")) throw new Error("Invalid URL");
-
-  const res = await axios({ url, method: "GET", responseType: "stream" });
-
-  await new Promise((resolve, reject) => {
-    const s = fsSync.createWriteStream(output);
-    res.data.pipe(s);
-    s.on("finish", resolve);
-    s.on("error", reject);
-  });
-};
-
 // ================= VIDEO =================
-const enhance = (input, output) => {
-  return new Promise((res, rej) => {
-    ffmpeg(input)
-      .videoFilters([
-        "scale=1280:720:force_original_aspect_ratio=decrease",
-        "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
-        "minterpolate=fps=60"
-      ])
-      .outputOptions(["-c:v libx264", "-crf 20"])
-      .on("end", res)
-      .on("error", rej)
-      .save(output);
+async function processVideo(sub) {
+  const input = `./in_${sub.id}.mp4`;
+  const output = `./out_${sub.id}.mp4`;
+
+  try {
+    sub.status = "downloading"; await sub.save();
+
+    await ytdlp(sub.link, { output: input });
+
+    sub.status = "processing"; await sub.save();
+
+    await Promise.race([
+      new Promise((res, rej) => {
+        ffmpeg(input)
+          .videoFilters(["scale=1920:1080", "unsharp=5:5:1.0"])
+          .on("end", res)
+          .on("error", rej)
+          .save(output);
+      }),
+      new Promise((_, rej) => setTimeout(() => rej("Timeout"), 600000))
+    ]);
+
+    sub.status = "done";
+    sub.file = output;
+    await sub.save();
+
+    sendToReview(sub);
+
+  } catch (e) {
+    sub.status = "failed";
+    await sub.save();
+  } finally {
+    cleanup([input]);
+  }
+}
+
+// ================= CLEANUP =================
+function cleanup(files) {
+  files.forEach(f => {
+    if (fs.existsSync(f)) fs.unlinkSync(f);
   });
-};
+}
 
-// ================= COMMAND HANDLER =================
-client.on("messageCreate", async msg => {
-  if (!msg.content.startsWith(PREFIX) || msg.author.bot) return;
-
-  const args = msg.content.slice(PREFIX.length).split(/ +/);
-  const cmd = args.shift().toLowerCase();
-
-  if (await isDisabled(msg.guild?.id, cmd)) {
-    return msg.reply("❌ Command disabled");
-  }
-
-  // ================= PROFILE =================
-  if (cmd === "profile") {
-    let u = await User.findOne({ userId: msg.author.id }) ||
-      await User.create({ userId: msg.author.id, username: msg.author.tag });
-
-    return msg.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(`👤 ${msg.author.username}`)
-          .addFields(
-            { name: "MMR", value: `${u.mmr}`, inline: true },
-            { name: "Warnings", value: `${u.warnings}`, inline: true }
-          )
-      ]
-    });
-  }
-
-  // ================= LEADERBOARD =================
-  if (cmd === "leaderboard") {
-    const top = await User.find().sort({ mmr: -1 }).limit(10);
-
-    return msg.reply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("🏆 Leaderboard")
-          .setDescription(top.map((u,i)=>`${i+1}. <@${u.userId}> - ${u.mmr}`).join("\n"))
-      ]
-    });
-  }
-
-  // ================= WARN =================
-  if (cmd === "warn") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return msg.reply("Admin only");
+// AUTO CLEAN LOOP
+setInterval(() => {
+  fs.readdirSync("./").forEach(f => {
+    if ((f.startsWith("in_") || f.startsWith("out_"))) {
+      const stat = fs.statSync(f);
+      if (Date.now() - stat.mtimeMs > 30 * 60 * 1000) {
+        fs.unlinkSync(f);
+      }
     }
+  });
+}, 60 * 60 * 1000);
 
-    const target = msg.mentions.users.first();
-    if (!target) return msg.reply("Mention user");
+// ================= RANK =================
+function getRank(mmr) {
+  let r = RANKS[RANKS.length - 1];
+  for (const rank of RANKS) {
+    if (mmr >= rank.mmr) r = rank;
+  }
+  return r;
+}
 
-    await User.updateOne(
-      { userId: target.id },
-      { $inc: { warnings: 1 } },
-      { upsert: true }
+async function applyRank(member, mmr) {
+  const rank = getRank(mmr);
+
+  if (member.roles.cache.has(rank.role)) return rank;
+
+  await member.roles.remove(RANKS.map(r => r.role)).catch(() => {});
+  await member.roles.add(rank.role).catch(() => {});
+
+  return rank;
+}
+
+// ================= REVIEW =================
+async function sendToReview(sub) {
+  const ch = await client.channels.fetch(process.env.REVIEW_CHANNEL);
+
+  const buttons = RANKS.map(r =>
+    new ButtonBuilder()
+      .setCustomId(`rank_${r.name}_${sub.userId}`)
+      .setLabel(r.name)
+      .setStyle(ButtonStyle.Primary)
+  );
+
+  const row1 = new ActionRowBuilder().addComponents(buttons.slice(0, 5));
+  const row2 = new ActionRowBuilder().addComponents(buttons.slice(5));
+
+  await ch.send({
+    content: `🎬 <@${sub.userId}>\n${sub.link}`,
+    components: [row1, row2]
+  });
+}
+
+// ================= SLASH =================
+client.once("ready", async () => {
+  console.log(`🔥 ${client.user.tag}`);
+
+  const cmds = [
+    new SlashCommandBuilder().setName("submit").setDescription("Submit clip"),
+    new SlashCommandBuilder().setName("profile").setDescription("Profile"),
+    new SlashCommandBuilder().setName("boost").setDescription("Boost MMR")
+  ].map(c => c.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+
+  await rest.put(
+    Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+    { body: cmds }
+  );
+});
+
+// ================= INTERACTIONS =================
+client.on("interactionCreate", async i => {
+
+  // ===== COMMANDS =====
+  if (i.isChatInputCommand()) {
+
+    const user = await User.findOneAndUpdate(
+      { userId: i.user.id },
+      { $setOnInsert: { username: i.user.tag } },
+      { upsert: true, new: true }
     );
 
-    return msg.reply(`⚠️ Warned ${target.tag}`);
-  }
+    // SUBMIT
+    if (i.commandName === "submit") {
+      const modal = new ModalBuilder()
+        .setCustomId("submit")
+        .setTitle("Submit Clip");
 
-  // ================= TOGGLE COMMAND =================
-  if (cmd === "toggle") {
-    if (!msg.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-      return msg.reply("Admin only");
-    }
-
-    const targetCmd = args[0];
-    if (!targetCmd) return msg.reply("Specify command");
-
-    let config = await Config.findOne({ guildId: msg.guild.id }) ||
-      await Config.create({ guildId: msg.guild.id, disabledCommands: [] });
-
-    if (config.disabledCommands.includes(targetCmd)) {
-      config.disabledCommands = config.disabledCommands.filter(c => c !== targetCmd);
-      await config.save();
-      return msg.reply(`✅ Enabled ${targetCmd}`);
-    } else {
-      config.disabledCommands.push(targetCmd);
-      await config.save();
-      return msg.reply(`❌ Disabled ${targetCmd}`);
-    }
-  }
-
-  // ================= ENHANCE =================
-  if (cmd === "enhance") {
-    const url = args[0];
-    if (!url) return msg.reply("Provide URL");
-
-    if (active.has(msg.author.id)) return msg.reply("Busy");
-
-    active.add(msg.author.id);
-
-    const id = crypto.randomBytes(4).toString("hex");
-    const input = `${TEMP_DIR}/in_${id}.mp4`;
-    const output = `${TEMP_DIR}/out_${id}.mp4`;
-
-    try {
-      await msg.reply("📥 Downloading...");
-      await downloadVideo(url, input);
-
-      await msg.channel.send("⚙️ Enhancing...");
-      await enhance(input, output);
-
-      await msg.author.send({ files: [output] });
-      await msg.channel.send("✅ Done");
-
-      await User.updateOne(
-        { userId: msg.author.id },
-        { $inc: { mmr: 5 } },
-        { upsert: true }
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(
+          new TextInputBuilder()
+            .setCustomId("link")
+            .setLabel("Streamable URL")
+            .setStyle(TextInputStyle.Short)
+        )
       );
 
-    } catch (e) {
-      console.error(e);
-      msg.channel.send("❌ Failed");
+      return i.showModal(modal);
     }
 
-    await fs.unlink(input).catch(()=>{});
-    await fs.unlink(output).catch(()=>{});
-    active.delete(msg.author.id);
+    // PROFILE
+    if (i.commandName === "profile") {
+      return i.reply(
+        `MMR: ${user.mmr}\nRank: ${getRank(user.mmr).name}\nCoins: ${user.coins}`
+      );
+    }
+
+    // BOOST SYSTEM 🔥
+    if (i.commandName === "boost") {
+      const now = Date.now();
+
+      if (now - user.lastBoost < 3600000)
+        return i.reply({ content: "⏳ 1h cooldown", ephemeral: true });
+
+      user.boostStreak++;
+
+      const reward = Math.floor(50 * Math.pow(1.1, user.boostStreak));
+
+      user.mmr += reward;
+      user.coins += reward;
+      user.lastBoost = now;
+
+      if (user.mmr > user.peakMMR) user.peakMMR = user.mmr;
+
+      await user.save();
+
+      const member = await i.guild.members.fetch(i.user.id);
+      const rank = await applyRank(member, user.mmr);
+
+      return i.reply(
+        `🔥 Boost!\n+${reward} MMR\nStreak: ${user.boostStreak}\nRank: ${rank.name}`
+      );
+    }
+  }
+
+  // ===== MODAL =====
+  if (i.isModalSubmit()) {
+    const link = i.fields.getTextInputValue("link");
+
+    if (!/^https?:\/\//.test(link))
+      return i.reply({ content: "Invalid URL", ephemeral: true });
+
+    const sub = await Submission.create({
+      id: crypto.randomBytes(4).toString("hex"),
+      userId: i.user.id,
+      link,
+      status: "queued"
+    });
+
+    queue.push(sub);
+    processQueue();
+
+    return i.reply({ content: "🚀 Queued!", ephemeral: true });
+  }
+
+  // ===== STAFF BUTTONS =====
+  if (i.isButton()) {
+
+    if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles))
+      return i.reply({ content: "Staff only", ephemeral: true });
+
+    const [type, rankName, userId] = i.customId.split("_");
+
+    if (type === "rank") {
+
+      const rank = RANKS.find(r => r.name === rankName);
+
+      const user = await User.findOneAndUpdate(
+        { userId },
+        { mmr: rank.mmr },
+        { upsert: true, new: true }
+      );
+
+      const member = await i.guild.members.fetch(userId);
+      await applyRank(member, user.mmr);
+
+      // LOG
+      const log = await client.channels.fetch(process.env.LOG_CHANNEL);
+      log.send(`🛠 ${i.user.tag} → ${rank.name} → <@${userId}>`);
+
+      return i.reply({ content: `Set ${rank.name}`, ephemeral: true });
+    }
   }
 });
 
-// ================= READY =================
-client.once("ready", () => {
-  console.log("🔥 FULL GOD MODE READY");
-  client.user.setActivity("God Engine", { type: ActivityType.Playing });
-});
-
-// ================= DASHBOARD API =================
+// ================= API =================
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.get("/", (_, res) => res.send("OK"));
 
-app.get("/", (_,res)=>res.send("OK"));
-
-app.get("/dashboard/:guild", async (req,res)=>{
-  const config = await Config.findOne({ guildId: req.params.guild });
-  res.json(config || { disabledCommands: [] });
-});
-
-app.post("/dashboard/toggle", async (req,res)=>{
-  const { guildId, command } = req.body;
-
-  let config = await Config.findOne({ guildId }) ||
-    await Config.create({ guildId, disabledCommands: [] });
-
-  if (config.disabledCommands.includes(command)) {
-    config.disabledCommands = config.disabledCommands.filter(c => c !== command);
-  } else {
-    config.disabledCommands.push(command);
-  }
-
-  await config.save();
-  res.json(config);
-});
-
-app.get("/leaderboard", async (_,res)=>{
-  const top = await User.find().sort({ mmr:-1 }).limit(20);
+app.get("/leaderboard", async (_, res) => {
+  const top = await User.find().sort({ mmr: -1 }).limit(50);
   res.json(top);
 });
 
 app.listen(process.env.PORT || 3000);
 
 // ================= LOGIN =================
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.TOKEN);
