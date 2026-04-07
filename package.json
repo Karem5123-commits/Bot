@@ -1,15 +1,13 @@
 {
   "name": "god-mode-discord-bot",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "High-end competitive Discord bot with MMR ranking, video processing, boost system, and staff review pipeline",
   "main": "main.js",
   "type": "module",
 
   "scripts": {
     "start": "node main.js",
-    "dev": "node --watch main.js",
-    "restart": "pm2 restart god-bot",
-    "stop": "pm2 stop god-bot"
+    "dev": "node --watch main.js"
   },
 
   "engines": {
@@ -21,12 +19,9 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "mongoose": "^8.5.1",
+    "cors": "^2.8.5",
     "fluent-ffmpeg": "^2.1.2",
     "ffmpeg-static": "^5.2.0"
-  },
-
-  "optionalDependencies": {
-    "pm2": "^5.3.0"
   },
 
   "keywords": [
