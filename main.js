@@ -93,12 +93,53 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
-});
+    client.once("ready", async () => {
+  console.clear();
 
-client.once("clientReady", () => {
+  const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+  const typeLine = async (text, delay = 15) => {
+    let line = "";
+    for (const char of text) {
+      line += char;
+      process.stdout.write(char);
+      await sleep(delay);
+    }
+    process.stdout.write("\n");
+  };
+
+  await typeLine("🔌 Initializing GOD CORE...");
+  await sleep(300);
+
+  await typeLine("⚙️ Loading modules...");
+  await sleep(300);
+
+  await typeLine("📡 Connecting to Discord API...");
+  await sleep(500);
+
+  await typeLine("🧠 Syncing MMR database...");
+  await sleep(400);
+
+  await typeLine("🎬 Initializing video processing engine...");
+  await sleep(500);
+
+  await typeLine("🚀 Starting API server...");
+  await sleep(400);
+
+  await typeLine("🔐 Verifying permissions...");
+  await sleep(300);
+
+  await typeLine("✅ All systems operational.");
+  await sleep(500);
+
   console.log(`
+██████╗  ██████╗ ██████╗ 
+██╔══██╗██╔═══██╗██╔══██╗
+██████╔╝██║   ██║██████╔╝
+██╔═══╝ ██║   ██║██╔══██╗
+██║     ╚██████╔╝██║  ██║
+╚═╝      ╚═════╝ ╚═╝  ╚═╝
+
 🔥 GOD MODE ACTIVATED
 🤖 ${client.user.tag} ONLINE
 `);
