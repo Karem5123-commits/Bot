@@ -1,16 +1,32 @@
 {
   "name": "god-mode-discord-bot",
-  "version": "4.0.0",
-  "description": "High-end competitive Discord bot with MMR, video processing, economy, and review system",
+  "version": "3.0.0",
+  "description": "High-end competitive Discord bot with MMR ranking, video processing, boost system, and staff review pipeline",
   "main": "main.js",
   "type": "module",
 
   "scripts": {
     "start": "node main.js",
-    "dev": "nodemon main.js",
-    "restart": "pm2 restart godbot",
-    "stop": "pm2 stop godbot",
-    "logs": "pm2 logs godbot"
+    "dev": "node --watch main.js",
+    "restart": "pm2 restart god-bot",
+    "stop": "pm2 stop god-bot"
+  },
+
+  "engines": {
+    "node": ">=18.0.0"
+  },
+
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.5.1",
+    "fluent-ffmpeg": "^2.1.2",
+    "ffmpeg-static": "^5.2.0"
+  },
+
+  "optionalDependencies": {
+    "pm2": "^5.3.0"
   },
 
   "keywords": [
@@ -18,37 +34,12 @@
     "bot",
     "mmr",
     "ranking",
+    "video-processing",
     "ffmpeg",
-    "yt-dlp",
     "economy",
-    "gaming"
+    "leaderboard"
   ],
 
-  "author": "YOU",
-  "license": "MIT",
-
-  "dependencies": {
-    "discord.js": "^14.14.1",
-    "mongoose": "^8.0.0",
-    "dotenv": "^16.4.0",
-    "express": "^4.18.2",
-    "cors": "^2.8.5",
-    "crypto": "^1.0.1",
-    "fluent-ffmpeg": "^2.1.2",
-    "ffmpeg-static": "^5.2.0",
-    "yt-dlp-exec": "^1.0.2",
-    "fs-extra": "^11.2.0",
-    "canvas": "^2.11.2",
-    "sharp": "^0.33.2",
-    "bullmq": "^5.0.0",
-    "ioredis": "^5.3.2"
-  },
-
-  "devDependencies": {
-    "nodemon": "^3.0.2"
-  },
-
-  "engines": {
-    "node": ">=18.0.0"
-  }
+  "author": "You",
+  "license": "MIT"
 }
