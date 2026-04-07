@@ -25,6 +25,7 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 // ================= CONFIG =================
 const PREFIX = "!";
 const REVIEW_CHANNEL = process.env.REVIEW_CHANNEL;
+const LOG_CHANNEL = process.env.LOG_CHANNEL;
 
 const RANKS = [
   { name: "SSS", role: "1488208025859788860", mmr: 2000 },
@@ -78,6 +79,7 @@ const client = new Client({
   ]
 });
 
+// ===== READY =====
 client.once("clientReady", () => {
   console.log(`
 ██████╗  ██████╗ ██████╗ 
@@ -91,6 +93,14 @@ client.once("clientReady", () => {
 🤖 ${client.user.tag} ONLINE
 `);
 });
+
+// ===== AUTO APPLY ROLE ON JOIN =====
+client.on("guildMemberAdd", async member => {
+  const user = await User.findOne({ userId: member.id });
+  if (!user) return;
+  applyRank(member, user.mmr);
+});
+
 // ================= VIDEO PROCESS =================
 async function processVideo(link, id, userId) {
   const output = `out_${id}.mp4`;
@@ -118,7 +128,7 @@ async function processVideo(link, id, userId) {
 
     const row1 = new ActionRowBuilder().addComponents(buttons.slice(0, 5));
     const row2 = new ActionRowBuilder().addComponents(
-      buttons.slice(5),
+      ...buttons.slice(5),
       new ButtonBuilder().setCustomId(`mmr_up_${userId}`).setLabel("+MMR").setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`mmr_down_${userId}`).setLabel("-MMR").setStyle(ButtonStyle.Danger)
     );
@@ -147,19 +157,20 @@ client.on("messageCreate", async msg => {
 
   // ===== SUBMIT =====
   if (cmd === "submit") {
-  return msg.reply({
-    content: "🎬 Click below to submit your clip",
-    components: [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("open_submit_modal")
-          .setLabel("Submit Clip")
-          .setStyle(ButtonStyle.Primary)
-      )
-    ]
-  });
-}
-  // ===== BOOST SYSTEM =====
+    return msg.reply({
+      content: "🎬 Click below to submit your clip",
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("open_submit_modal")
+            .setLabel("Submit Clip")
+            .setStyle(ButtonStyle.Primary)
+        )
+      ]
+    });
+  }
+
+  // ===== BOOST =====
   if (cmd === "boost") {
     const now = Date.now();
 
@@ -177,6 +188,9 @@ client.on("messageCreate", async msg => {
     if (user.mmr > user.peakMMR) user.peakMMR = user.mmr;
 
     await user.save();
+
+    const member = await msg.guild.members.fetch(msg.author.id);
+    await applyRank(member, user.mmr);
 
     return msg.reply(`🚀 Boosted!\n+${reward} coins\n+25 MMR\n🔥 Streak: ${user.boostStreak}`);
   }
@@ -198,11 +212,30 @@ client.on("messageCreate", async msg => {
   }
 });
 
-// ================= MODAL =================
+// ================= INTERACTIONS =================
 client.on("interactionCreate", async i => {
-  if (!i.isModalSubmit()) return;
 
-  if (i.customId === "submit_modal") {
+  // ===== BUTTON → OPEN MODAL =====
+  if (i.isButton() && i.customId === "open_submit_modal") {
+    const modal = new ModalBuilder()
+      .setCustomId("submit_modal")
+      .setTitle("Submit Clip");
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(
+        new TextInputBuilder()
+          .setCustomId("link")
+          .setLabel("Direct Video URL")
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true)
+      )
+    );
+
+    return i.showModal(modal);
+  }
+
+  // ===== MODAL =====
+  if (i.isModalSubmit() && i.customId === "submit_modal") {
     const link = i.fields.getTextInputValue("link");
 
     if (!link.startsWith("http"))
@@ -214,59 +247,54 @@ client.on("interactionCreate", async i => {
 
     return i.reply({ content: "🚀 Processing started!", ephemeral: true });
   }
-});
 
-// ================= STAFF BUTTONS =================
-client.on("interactionCreate", async i => {
-  if (!i.isButton()) return;
+  // ===== STAFF =====
+  if (i.isButton()) {
+    if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles))
+      return i.reply({ content: "Staff only", ephemeral: true });
 
-  if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles))
-    return i.reply({ content: "Staff only", ephemeral: true });
+    const [type, value, userId] = i.customId.split("_");
 
-  const [type, value, userId] = i.customId.split("_");
+    const user = await User.findOneAndUpdate(
+      { userId },
+      {},
+      { upsert: true, new: true }
+    );
 
-  const user = await User.findOneAndUpdate(
-    { userId },
-    {},
-    { upsert: true, new: true }
-  );
+    const member = await i.guild.members.fetch(userId).catch(()=>{});
+    if (!member) return;
 
-  const member = await i.guild.members.fetch(userId).catch(()=>{});
-  if (!member) return;
+    if (type === "rank") {
+      const rank = RANKS.find(r => r.name === value);
 
-  // ===== SET RANK =====
-  if (type === "rank") {
-    const rank = RANKS.find(r => r.name === value);
+      user.mmr = rank.mmr;
+      await user.save();
+      await applyRank(member, user.mmr);
 
-    user.mmr = rank.mmr;
-    if (user.mmr > user.peakMMR) user.peakMMR = user.mmr;
+      if (LOG_CHANNEL) {
+        const log = await client.channels.fetch(LOG_CHANNEL);
+        log.send(`🛠️ ${i.user.tag} set ${userId} → ${rank.name}`);
+      }
 
-    await user.save();
-    await applyRank(member, user.mmr);
+      return i.reply({ content: `✅ Set ${rank.name}`, ephemeral: true });
+    }
 
-    return i.reply({ content: `✅ Set ${rank.name}`, ephemeral: true });
-  }
+    if (type === "mmr") {
+      const change = value === "up" ? 50 : -50;
 
-  // ===== MMR CHANGE =====
-  if (type === "mmr") {
-    const change = value === "up" ? 50 : -50;
+      user.mmr += change;
+      await user.save();
+      await applyRank(member, user.mmr);
 
-    user.mmr += change;
-    if (user.mmr < 0) user.mmr = 0;
-
-    if (user.mmr > user.peakMMR) user.peakMMR = user.mmr;
-
-    await user.save();
-    await applyRank(member, user.mmr);
-
-    return i.reply({
-      content: `MMR: ${user.mmr} (${change > 0 ? "+" : ""}${change})`,
-      ephemeral: true
-    });
+      return i.reply({
+        content: `MMR: ${user.mmr}`,
+        ephemeral: true
+      });
+    }
   }
 });
 
-// ================= AUTO CLEANUP =================
+// ================= CLEANUP =================
 setInterval(() => {
   fs.readdirSync(".")
     .filter(f => f.startsWith("out_"))
