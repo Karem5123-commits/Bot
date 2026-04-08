@@ -1,20 +1,17 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionsBitField } = require('discord.js');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { 
+    Client, GatewayIntentBits, Partials, ActionRowBuilder, 
+    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
+    TextInputStyle, EmbedBuilder 
+} = require('discord.js');
 const mongoose = require('mongoose');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
-const colors = require('colors');
 
-// --- ⚙️ MASTER CONFIG (SYNCED TO YOUR RAILWAY ENVS) ---
 const CONFIG = {
     MAIN_GUILD: process.env.GUILD_ID,
-    REVIEW_GUILD: process.env.REVIEW_GUILD,
     REVIEW_CHAN: process.env.REVIEW_CHANNEL_ID,
     LOG_CHAN: process.env.LOG_CHANNEL_ID,
-    OWNERS: process.env.OWNER_IDS?.split(',') || [],
-    R2_BUCKET: process.env.R2_BUCKET,
-    BASE_URL: process.env.BASE_URL,
     RANKS: {
         "SSS": { id: "1488208025859788860", elo: 100 },
         "SS+": { id: "1488208185633280041", elo: 75 },
@@ -25,141 +22,114 @@ const CONFIG = {
     }
 };
 
-// --- 🌐 R2 CLOUD UPLINK ---
-const r2 = new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: { accessKeyId: process.env.R2_ACCESS_KEY, secretAccessKey: process.env.R2_SECRET_KEY }
-});
-
-// --- 🗄️ DATABASE SCHEMA ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: String,
     username: String,
     rank: { type: String, default: "None" },
-    xp: { type: Number, default: 0 },
-    elo: { type: Number, default: 0 },
-    premiumCode: { type: String, default: null },
-    isShadowBanned: { type: Boolean, default: false },
-    flags: { type: Number, default: 0 },
-    lastSeen: { type: Date, default: Date.now },
-    lastCommand: { type: Date, default: 0 }
+    elo: { type: Number, default: 0 }
 }));
 
-// --- 🛡️ THE KERNEL ---
-let renderQueue = [];
-let isRendering = false;
+const client = new Client({ 
+    intents: [3276799], 
+    partials: [Partials.Channel, Partials.GuildMember] 
+});
 
-const Kernel = {
-    log: (type, msg) => console.log(`[${type}]`.magenta.bold + ` > `.white + `${msg}`.cyan),
-    
-    // Security check for command spam
-    checkSpam: async (u, m) => {
-        if (CONFIG.OWNERS.includes(m.author.id)) return false;
-        const now = Date.now();
-        if (now - u.lastCommand < 2000) return true;
-        u.lastCommand = now;
-        await u.save();
-        return false;
-    },
-
-    processQueue: async () => {
-        if (isRendering || renderQueue.length === 0) return;
-        isRendering = true;
-        const job = renderQueue.shift();
-        const fileName = `export_${Date.now()}.mp4`;
-        const localPath = `./${fileName}`;
-
-        ffmpeg(job.att.url)
-            .outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 16", "-preset ultrafast"])
-            .on('end', async () => {
-                try {
-                    await r2.send(new PutObjectCommand({ Bucket: CONFIG.R2_BUCKET, Key: fileName, Body: fs.readFileSync(localPath), ContentType: 'video/mp4' }));
-                    const url = `${CONFIG.BASE_URL}/${fileName}`;
-                    await job.m.author.send({ content: `✅ **RENDER_READY:** ${url}` });
-                    if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
-                } catch (e) { Kernel.log("R2_ERR", e.message); }
-                isRendering = false; Kernel.processQueue();
-            }).save(localPath);
-    }
-};
-
-// --- 🚀 DISCORD ENGINE ---
-const client = new Client({ intents: [3276799], partials: [Partials.Channel, Partials.GuildMember] });
-
+// --- 🚀 MESSAGE COMMANDS ---
 client.on("messageCreate", async (m) => {
     if (m.author.bot || !m.guild) return;
-    let u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username }, { upsert: true, new: true });
-    
-    if (u.isShadowBanned) return;
-    if (!m.content.startsWith('!')) return;
-    if (await Kernel.checkSpam(u, m)) return;
 
-    const args = m.content.slice(1).trim().split(/ +/g);
-    const cmd = args.shift().toLowerCase();
+    // !submit opens the Modal (The "Panel")
+    if (m.content.startsWith('!submit')) {
+        const modal = new ModalBuilder()
+            .setCustomId('submit_modal')
+            .setTitle('OPERATIVE SUBMISSION');
 
-    // --- 📥 ORIGINAL !submit ---
-    if (cmd === 'submit') {
-        const att = m.attachments.first();
-        if (!att) return m.reply("🚫 **ATTACH_FILE**");
-        const reviewChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
-        const row = new ActionRowBuilder().addComponents(
-            Object.keys(CONFIG.RANKS).map(rank => new ButtonBuilder().setCustomId(`sel_${rank}_${m.author.id}`).setLabel(rank).setStyle(ButtonStyle.Secondary))
+        const linkInput = new TextInputBuilder()
+            .setCustomId('streamable_link')
+            .setLabel("PASTE YOUR STREAMABLE LINK")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder("https://streamable.com/...")
+            .setRequired(true);
+
+        const firstActionRow = new ActionRowBuilder().addComponents(linkInput);
+        modal.addComponents(firstActionRow);
+
+        await m.channel.send({ content: "⚠️ **SUBMISSION_UPLINK:** Check your prompt." }); // Discord requires an interaction or a specific trigger to open Modals usually via buttons. 
+        // Note: Modals can only be opened via INTERACTION (Buttons/Slash). 
+        // I will add a button to trigger the Modal to keep it safe.
+        
+        const triggerBtn = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('open_submit')
+                .setLabel('OPEN SUBMISSION PANEL')
+                .setStyle(ButtonStyle.Primary)
         );
-        await reviewChan.send({ content: `📥 **SUBMISSION:** ${m.author.tag}`, files: [att.url], components: [row] });
-        return m.reply("✅ **SENT**");
-    }
 
-    // --- 📽️ ORIGINAL !quality (NOW WITH R2) ---
-    if (cmd === 'quality') {
-        const att = m.attachments.first();
-        if (!att) return m.reply("🚫 **NO_FILE**");
-        const status = await m.reply("⏳ **QUEUED**");
-        renderQueue.push({ m, att, fileSize: att.size, isPremium: !!u.premiumCode, statusMsg: status });
-        Kernel.processQueue();
-    }
-
-    // --- 💎 ORIGINAL !code ---
-    if (cmd === 'code') {
-        if (args[0] === process.env.ADMIN_KEY) {
-            await User.updateOne({ discordId: m.author.id }, { premiumCode: args[0] });
-            return m.reply("⭐ **PREMIUM_ACTIVE**");
-        }
-    }
-
-    // --- 📊 NEW META CMDS ---
-    if (cmd === 'profile') m.reply(`👤 **${u.username}** | ELO: \`${u.elo}\` | Rank: \`${u.rank}\``);
-    if (cmd === 'bet') {
-        const amt = parseInt(args[0]);
-        if (isNaN(amt) || u.elo < amt) return m.reply("❌ **NO_ELO**");
-        const win = Math.random() > 0.55;
-        await User.updateOne({ discordId: m.author.id }, { $inc: { elo: win ? amt : -amt } });
-        m.reply(win ? `✅ +${amt}` : `💀 -${amt}`);
+        return m.reply({ content: "Click below to open the link panel:", components: [triggerBtn] });
     }
 });
 
-// --- ⚡ YOUR ORIGINAL RANKING SYSTEM (TOUCH-PROOF) ---
+// --- ⚡ INTERACTION HANDLER (MODALS & BUTTONS) ---
 client.on('interactionCreate', async (i) => {
-    if (!i.isButton()) return;
-    const [action, rank, uid] = i.customId.split('_');
-    if (action === 'sel') {
-        const reward = CONFIG.RANKS[rank].elo;
-        await User.findOneAndUpdate({ discordId: uid }, { rank: rank, $inc: { elo: reward } });
-        await i.update({ content: `✅ **${rank}** applied (+${reward} ELO)`, components: [] });
-        const log = client.channels.cache.get(CONFIG.LOG_CHAN);
-        if (log) log.send(`🛡️ **RANKUP:** <@${uid}> set to **${rank}** by ${i.user.tag}`);
+    
+    // 1. Open the Modal when "OPEN SUBMISSION PANEL" is clicked
+    if (i.isButton() && i.customId === 'open_submit') {
+        const modal = new ModalBuilder()
+            .setCustomId('submission_panel')
+            .setTitle('Operative Submission');
+
+        const linkInput = new TextInputBuilder()
+            .setCustomId('link_value')
+            .setLabel("STREAMABLE LINK")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
+
+        modal.addComponents(new ActionRowBuilder().addComponents(linkInput));
+        return i.showModal(modal);
+    }
+
+    // 2. Handle the Modal Data (Send to Review Channel)
+    if (i.isModalSubmit() && i.customId === 'submission_panel') {
+        const link = i.fields.getTextInputValue('link_value');
+        const reviewChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
+
+        const buttons = Object.keys(CONFIG.RANKS).map(r => 
+            new ButtonBuilder().setCustomId(`rank_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary)
+        );
+
+        const rows = [
+            new ActionRowBuilder().addComponents(buttons.slice(0, 3)),
+            new ActionRowBuilder().addComponents(buttons.slice(3))
+        ];
+
+        await reviewChan.send({ 
+            content: `📥 **NEW_SUBMISSION** from <@${i.user.id}>\n**Link:** ${link}`, 
+            components: rows 
+        });
+
+        return i.reply({ content: "✅ **UPLINK_SUCCESS:** Staff are reviewing your link.", ephemeral: true });
+    }
+
+    // 3. Handle the Ranking Buttons (The Staff Part)
+    if (i.isButton() && i.customId.startsWith('rank_')) {
+        const [_, rankName, targetId] = i.customId.split('_');
+        const guild = client.guilds.cache.get(CONFIG.MAIN_GUILD);
+        const member = await guild.members.fetch(targetId).catch(() => null);
+
+        if (!member) return i.reply({ content: "❌ User not found.", ephemeral: true });
+
+        const rankData = CONFIG.RANKS[rankName];
+        await User.findOneAndUpdate({ discordId: targetId }, { rank: rankName, $inc: { elo: rankData.elo } }, { upsert: true });
+
+        // Update Roles
+        const allRankIds = Object.values(CONFIG.RANKS).map(r => r.id);
+        await member.roles.remove(allRankIds).catch(() => {});
+        await member.roles.add(rankData.id).catch(() => {});
+
+        await i.update({ content: `✅ **SUCCESS:** <@${targetId}> is now **${rankName}**.`, components: [] });
     }
 });
 
-// --- 🛰️ UPGRADED BOOT ---
-async function boot() {
-    console.clear();
-    console.log(`\u001b[1;35m  █████╗ ██████╗  ██████╗██╗  ██╗██╗████████╗\n \u001b[1;36m ██╔══██╗██╔══██╗██╔════╝██║  ██║██║╚══██╔══╝\n \u001b[1;34m ███████║██████╔╝██║     ███████║██║   ██║   \u001b[0m`.bold);
-    
-    try {
-        await mongoose.connect(process.env.MONGO_URI);
-        await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;32m[!] CORE STABLE. RANKING SYSTEM SECURED. \u001b[0m\n`);
-    } catch (e) { console.log(e); }
-}
-boot();
+mongoose.connect(process.env.MONGO_URI).then(() => {
+    client.login(process.env.DISCORD_TOKEN);
+});
