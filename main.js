@@ -112,7 +112,7 @@ client.on('messageCreate', async (m) => {
     } catch (e) { State.log("CMD_ERR", e.message); }
 });
 
-// [07] ULTIMATE INTERACTION LISTENER
+// [07] ULTIMATE INTERACTION LISTENER (FIXED BROADCAST)
 client.on('interactionCreate', async (i) => {
     if (i.isButton() && i.customId === 'submit_content') {
         const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('🚀 ARCHITECT_UPLOADER');
@@ -131,17 +131,27 @@ client.on('interactionCreate', async (i) => {
             .setAuthor({ name: i.user.username, iconURL: i.user.displayAvatarURL() })
             .setTitle('📥 INBOUND_DATA_STREAM')
             .addFields(
+                { name: '👤 OPERATIVE', value: `${i.user}`, inline: true },
                 { name: '🔗 TARGET_URL', value: link },
                 { name: '📝 INTEL', value: `\`\`\`${desc}\`\`\`` },
-                { name: '📊 STATUS', value: '`VERIFYING_RECON`', inline: true }
+                { name: '📊 STATUS', value: '`🟡 PENDING_VERIFICATION`', inline: true }
             )
             .setFooter({ text: `SRC_ID: ${i.user.id}` }).setTimestamp();
 
-        // Fix: Explicitly send to the channel and log it
-        await i.channel.send({ embeds: [card] });
-        const ack = await i.reply({ content: `📡 **DATA_STREAM_SYNCED**`, fetchReply: true });
-        setTimeout(() => ack.delete().catch(() => {}), 15000);
-        State.log("SUBMIT", `${i.user.username} synced link.`);
+        try {
+            // STEP 1: Force send to the channel first
+            await i.channel.send({ embeds: [card] });
+            
+            // STEP 2: Reply to the user to close the modal
+            const ack = await i.reply({ content: `📡 **DATA_STREAM_SYNCED**`, fetchReply: true });
+            
+            // STEP 3: Auto-delete the user notification
+            setTimeout(() => ack.delete().catch(() => {}), 10000);
+            
+            State.log("SUBMIT", `${i.user.username} synced data to channel.`);
+        } catch (err) {
+            console.error("❌ BROADCAST FAILED:".red, err.message);
+        }
     }
 });
 
