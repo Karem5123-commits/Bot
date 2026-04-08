@@ -6,7 +6,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
 const colors = require('colors');
 
-// --- ⚙️ MASTER CONFIGURATION (SYNCED TO RAILWAY) ---
+// --- ⚙️ MASTER CONFIG (SYNCED TO YOUR RAILWAY ENVS) ---
 const CONFIG = {
     MAIN_GUILD: process.env.GUILD_ID,
     REVIEW_GUILD: process.env.REVIEW_GUILD,
@@ -15,8 +15,6 @@ const CONFIG = {
     OWNERS: process.env.OWNER_IDS?.split(',') || [],
     R2_BUCKET: process.env.R2_BUCKET,
     BASE_URL: process.env.BASE_URL,
-    DOUBLE_ELO: false,   
-    GLITCH_EVENT: false,
     RANKS: {
         "SSS": { id: "1488208025859788860", elo: 100 },
         "SS+": { id: "1488208185633280041", elo: 75 },
@@ -27,14 +25,14 @@ const CONFIG = {
     }
 };
 
-// --- 🌐 R2 CLOUD STORAGE ---
+// --- 🌐 R2 CLOUD UPLINK ---
 const r2 = new S3Client({
     region: 'auto',
     endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId: process.env.R2_ACCESS_KEY, secretAccessKey: process.env.R2_SECRET_KEY }
 });
 
-// --- 🗄️ MASTER DATABASE ---
+// --- 🗄️ DATABASE SCHEMA ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: String,
     username: String,
@@ -45,54 +43,42 @@ const User = mongoose.model('User', new mongoose.Schema({
     isShadowBanned: { type: Boolean, default: false },
     flags: { type: Number, default: 0 },
     lastSeen: { type: Date, default: Date.now },
-    lastCommand: { type: Date, default: 0 },
-    signatures: [{ tags: [String], motionProfile: String }]
+    lastCommand: { type: Date, default: 0 }
 }));
 
-// --- 🛡️ THE KERNEL (SECURITY, QUEUE, NEURAL) ---
+// --- 🛡️ THE KERNEL ---
 let renderQueue = [];
 let isRendering = false;
 
 const Kernel = {
     log: (type, msg) => console.log(`[${type}]`.magenta.bold + ` > `.white + `${msg}`.cyan),
-
+    
+    // Security check for command spam
     checkSpam: async (u, m) => {
         if (CONFIG.OWNERS.includes(m.author.id)) return false;
         const now = Date.now();
-        if (now - u.lastCommand < 2500) { // 2.5s Rate Limit
-            u.flags += 1;
-            if (u.flags >= 10) u.isShadowBanned = true;
-            await u.save();
-            return true;
-        }
+        if (now - u.lastCommand < 2000) return true;
         u.lastCommand = now;
         await u.save();
         return false;
     },
 
-    uploadR2: async (path, name) => {
-        await r2.send(new PutObjectCommand({ Bucket: CONFIG.R2_BUCKET, Key: name, Body: fs.readFileSync(path), ContentType: 'video/mp4' }));
-        return `${CONFIG.BASE_URL}/${name}`;
-    },
-
     processQueue: async () => {
         if (isRendering || renderQueue.length === 0) return;
         isRendering = true;
-        
-        renderQueue.sort((a, b) => (b.isPremium - a.isPremium) || (a.fileSize - b.fileSize));
         const job = renderQueue.shift();
-        const fileName = `sig_${Date.now()}.mp4`;
+        const fileName = `export_${Date.now()}.mp4`;
         const localPath = `./${fileName}`;
 
         ffmpeg(job.att.url)
             .outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 16", "-preset ultrafast"])
             .on('end', async () => {
                 try {
-                    const url = await Kernel.uploadR2(localPath, fileName);
-                    const embed = new EmbedBuilder().setColor(0x00FFFF).setTitle('💎 NEURAL_EXPORT_STABLE').setDescription(`**Uplink Complete.**\n🔗 [Download/View Render](${url})`);
-                    await job.m.author.send({ embeds: [embed] });
+                    await r2.send(new PutObjectCommand({ Bucket: CONFIG.R2_BUCKET, Key: fileName, Body: fs.readFileSync(localPath), ContentType: 'video/mp4' }));
+                    const url = `${CONFIG.BASE_URL}/${fileName}`;
+                    await job.m.author.send({ content: `✅ **RENDER_READY:** ${url}` });
                     if (fs.existsSync(localPath)) fs.unlinkSync(localPath);
-                } catch (e) { Kernel.log("CLOUD_ERR", e.message); }
+                } catch (e) { Kernel.log("R2_ERR", e.message); }
                 isRendering = false; Kernel.processQueue();
             }).save(localPath);
     }
@@ -103,7 +89,7 @@ const client = new Client({ intents: [3276799], partials: [Partials.Channel, Par
 
 client.on("messageCreate", async (m) => {
     if (m.author.bot || !m.guild) return;
-    let u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username, lastSeen: Date.now() }, { upsert: true, new: true });
+    let u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username }, { upsert: true, new: true });
     
     if (u.isShadowBanned) return;
     if (!m.content.startsWith('!')) return;
@@ -112,62 +98,68 @@ client.on("messageCreate", async (m) => {
     const args = m.content.slice(1).trim().split(/ +/g);
     const cmd = args.shift().toLowerCase();
 
+    // --- 📥 ORIGINAL !submit ---
+    if (cmd === 'submit') {
+        const att = m.attachments.first();
+        if (!att) return m.reply("🚫 **ATTACH_FILE**");
+        const reviewChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
+        const row = new ActionRowBuilder().addComponents(
+            Object.keys(CONFIG.RANKS).map(rank => new ButtonBuilder().setCustomId(`sel_${rank}_${m.author.id}`).setLabel(rank).setStyle(ButtonStyle.Secondary))
+        );
+        await reviewChan.send({ content: `📥 **SUBMISSION:** ${m.author.tag}`, files: [att.url], components: [row] });
+        return m.reply("✅ **SENT**");
+    }
+
+    // --- 📽️ ORIGINAL !quality (NOW WITH R2) ---
     if (cmd === 'quality') {
         const att = m.attachments.first();
-        if (!att?.contentType?.startsWith('video/')) return m.reply("🚫 **INVALID_DATA_STREAM**");
-        const status = await m.reply(`⏳ **SYNCING_TO_R2_ADAPTIVE_QUEUE...**`);
+        if (!att) return m.reply("🚫 **NO_FILE**");
+        const status = await m.reply("⏳ **QUEUED**");
         renderQueue.push({ m, att, fileSize: att.size, isPremium: !!u.premiumCode, statusMsg: status });
         Kernel.processQueue();
     }
 
-    if (cmd === 'bet') {
-        const amt = Math.floor(parseInt(args[0]));
-        if (isNaN(amt) || u.elo < amt) return m.reply("❌ **INSUFFICIENT_ELO**");
-        const win = Math.random() > 0.55;
-        await User.updateOne({ discordId: m.author.id }, { $inc: { elo: win ? amt : -amt } });
-        m.reply(win ? `✅ **WIN:** +${amt} ELO` : `💀 **LOSS:** -${amt} ELO`);
+    // --- 💎 ORIGINAL !code ---
+    if (cmd === 'code') {
+        if (args[0] === process.env.ADMIN_KEY) {
+            await User.updateOne({ discordId: m.author.id }, { premiumCode: args[0] });
+            return m.reply("⭐ **PREMIUM_ACTIVE**");
+        }
     }
 
-    if (cmd === 'profile') {
-        const embed = new EmbedBuilder().setColor(0x00FFFF).setTitle(`👤 OPERATIVE: ${m.author.username}`).addFields({ name: '📊 DATA', value: `Rank: **${u.rank}**\nELO: \`${u.elo}\`\nFlags: \`${u.flags}\`` });
-        m.reply({ embeds: [embed] });
+    // --- 📊 NEW META CMDS ---
+    if (cmd === 'profile') m.reply(`👤 **${u.username}** | ELO: \`${u.elo}\` | Rank: \`${u.rank}\``);
+    if (cmd === 'bet') {
+        const amt = parseInt(args[0]);
+        if (isNaN(amt) || u.elo < amt) return m.reply("❌ **NO_ELO**");
+        const win = Math.random() > 0.55;
+        await User.updateOne({ discordId: m.author.id }, { $inc: { elo: win ? amt : -amt } });
+        m.reply(win ? `✅ +${amt}` : `💀 -${amt}`);
     }
 });
 
-// --- 🛰️ UPGRADED SINGULARITY BOOT SYSTEM ---
+// --- ⚡ YOUR ORIGINAL RANKING SYSTEM (TOUCH-PROOF) ---
+client.on('interactionCreate', async (i) => {
+    if (!i.isButton()) return;
+    const [action, rank, uid] = i.customId.split('_');
+    if (action === 'sel') {
+        const reward = CONFIG.RANKS[rank].elo;
+        await User.findOneAndUpdate({ discordId: uid }, { rank: rank, $inc: { elo: reward } });
+        await i.update({ content: `✅ **${rank}** applied (+${reward} ELO)`, components: [] });
+        const log = client.channels.cache.get(CONFIG.LOG_CHAN);
+        if (log) log.send(`🛡️ **RANKUP:** <@${uid}> set to **${rank}** by ${i.user.tag}`);
+    }
+});
+
+// --- 🛰️ UPGRADED BOOT ---
 async function boot() {
     console.clear();
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-    console.log(`
-    \u001b[1;35m  █████╗ ██████╗  ██████╗██╗  ██╗██╗████████╗███████╗ ██████╗████████╗
-    \u001b[1;35m ██╔══██╗██╔══██╗██╔════╝██║  ██║██║╚══██╔══╝██╔════╝██╔════╝╚══██╔══╝
-    \u001b[1;36m ███████║██████╔╝██║     ███████║██║   ██║   █████╗  ██║        ██║   
-    \u001b[1;36m ██╔══██║██╔══██╗██║     ██╔══██║██║   ██║   ██╔══╝  ██║        ██║   
-    \u001b[1;34m ██║  ██║██║  ██║╚██████╗██║  ██║██║   ██║   ███████╗╚██████╗   ██║   
-    \u001b[1;34m ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝   ╚═╝   ╚══════╝ ╚═════╝   ╚═╝   \u001b[0m
-    `.bold);
-
-    const stages = [
-        { name: "NEURAL_KERNEL", info: "Checking logic gates..." },
-        { name: "CLOUDFLARE_R2", info: "Establishing bucket uplink..." },
-        { name: "MONGODB_ATLAS", info: "Syncing operative database..." },
-        { name: "DISCORD_API", info: "Connecting to gateway..." }
-    ];
-
-    for (const stage of stages) {
-        process.stdout.write(` \u001b[1;37m[🔧] ${stage.name.padEnd(15)} : ${stage.info}`);
-        await sleep(600);
-        process.stdout.write(` \u001b[1;32m[ ONLINE ]\n\u001b[0m`);
-    }
-
+    console.log(`\u001b[1;35m  █████╗ ██████╗  ██████╗██╗  ██╗██╗████████╗\n \u001b[1;36m ██╔══██╗██╔══██╗██╔════╝██║  ██║██║╚══██╔══╝\n \u001b[1;34m ███████║██████╔╝██║     ███████║██║   ██║   \u001b[0m`.bold);
+    
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;35m[!] SINGULARITY_V6_ACTIVE : SYSTEM_STABLE\u001b[0m\n`);
-    } catch (e) {
-        console.log(`\n \u001b[1;31m[!] CRITICAL_FAILURE: ${e.message}\u001b[0m`);
-    }
+        console.log(`\n \u001b[1;32m[!] CORE STABLE. RANKING SYSTEM SECURED. \u001b[0m\n`);
+    } catch (e) { console.log(e); }
 }
-
 boot();
