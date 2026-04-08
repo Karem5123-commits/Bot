@@ -1,6 +1,6 @@
 /**
  * TERMINAL V6: ARCHITECT HYPER-DRIVE
- * Final Integration: Diagnostic Boot + Render Queue + WebSocket Dashboard
+ * Integrated with Real-Time Command Hot-Reloading
  */
 
 require('dotenv').config();
@@ -18,6 +18,9 @@ const path = require('path');
 const colors = require('colors');
 const { execSync } = require('child_process');
 const os = require('os');
+
+// Import the external command module
+let Commands = require('./commands.js');
 
 // ==========================================
 // [01] CONFIGURATION
@@ -51,6 +54,7 @@ const State = {
     feed: [],
     cmdCache: new Map(),
     io: null,
+    SETTINGS: SETTINGS, // Linked for command.js access
     log(type, msg) {
         const entry = { type, msg, time: Date.now() };
         this.feed.unshift(entry);
@@ -132,33 +136,33 @@ app.post('/api/admin/toggle', async (req, res) => {
     res.json({ success: true });
 });
 
+// ==========================================
+// [06] MESSAGE LISTENER (HOT-RELOAD ENABLED)
+// ==========================================
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.content.startsWith('!')) return;
-    const args = m.content.slice(1).trim().split(/ +/);
-    const cmd = args.shift().toLowerCase();
-    if (State.cmdCache.get(cmd) === false && !SETTINGS.OWNERS.includes(m.author.id)) return m.reply("🔒 **LOCKED**");
 
-    if (cmd === "quality") {
-        const u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username }, { upsert: true, new: true });
-        if (!u.premiumCode && (u.level < 20 || u.hasUsedFreeRender)) return m.reply("❌ Level 20+ Required.");
-        const video = m.attachments.first();
-        if (!video?.contentType?.startsWith('video')) return m.reply("⚠️ Attach a video.");
-        RenderEngine.add(m, video.url, u, await m.reply("🛰️ **ANALYZING...**"));
+    // --- HOT-RELOAD LOGIC ---
+    // Clears the cache and re-imports the commands file on every message
+    // This allows real-time edits without restarting the bot.
+    try {
+        delete require.cache[require.resolve('./commands.js')];
+        Commands = require('./commands.js');
+    } catch (e) {
+        return console.error("Failed to hot-reload commands.js:", e);
     }
-    if (cmd === "rankcard") {
-        const data = await User.findOne({ discordId: m.author.id });
-        m.reply(`\`\`\`ansi\n\u001b[1;36m[USER]:\u001b[0m ${m.author.username}\n\u001b[1;35m[ELO]:\u001b[0m ${data?.elo || 0}\`\`\``);
-    }
+
+    // Execute the command through the Tiered System
+    await Commands.handle(m, client, State, RenderEngine, User);
 });
 
 // ==========================================
-// [06] THE HYPER-DRIVE BOOT SYSTEM
+// [07] THE HYPER-DRIVE BOOT SYSTEM
 // ==========================================
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     
-    // Hardware Diagnostic
     const totalRAM = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
     const cpuModel = os.cpus()[0].model.split('@')[0].trim();
 
@@ -174,7 +178,6 @@ async function boot() {
     console.log(` 🛰️  HOST: ${os.hostname().yellow} | 🧠  CORE: ${cpuModel.dim} | 📟  MEM: ${totalRAM}GB`);
     console.log("-".repeat(65).dim);
 
-    // Environmental Checks
     const check = (n, c) => {
         process.stdout.write(` > CHECKING ${n.padEnd(20)} `);
         const res = c();
@@ -206,7 +209,6 @@ async function boot() {
             await sleep(150);
         } catch (e) {
             process.stdout.write(`${"CRASHED".red.bold}\n`);
-            console.log(`   └─ Error: ${e.message}`.red.dim);
             process.exit(1);
         }
     }
@@ -216,7 +218,7 @@ async function boot() {
     console.log(` 👤 IDENTITY: ${client.user.tag.cyan} | 🌐 PORT: ${SETTINGS.PORT}`);
     console.log("=".repeat(65).cyan + "\n");
     
-    State.log("SYSTEM", "Architect V6 Integrated Hyper-Drive Online.");
+    State.log("SYSTEM", "Architect V6 Sync-Engine Online.");
 }
 
 boot();
