@@ -1,24 +1,25 @@
 {
-  "name": "architect-v6-singularity",
-  "version": "6.0.0",
-  "description": "High-performance ranking and neural upscale bot with R2 integration.",
-  "main": "index.js",
+  "name": "disco-competitive-system",
+  "version": "2.0.0",
+  "description": "Hyper-Drive Competitive Ranking & Quality Upscaling Bot",
+  "main": "main.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node main.js",
+    "dev": "nodemon main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.450.0",
-    "colors": "^1.4.0",
     "discord.js": "^14.13.0",
+    "mongoose": "^7.6.3",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2",
+    "@aws-sdk/client-s3": "^3.427.0",
+    "axios": "^1.6.0",
     "fluent-ffmpeg": "^2.1.2",
-    "mongoose": "^7.6.3"
+    "colors": "^1.4.0",
+    "crypto": "^1.0.1"
   },
   "engines": {
-    "node": ">=18.x"
+    "node": "22.x"
   },
-  "author": "Architect",
-  "license": "ISC"
+  "author": "Operative",
+  "license": "MIT"
 }
