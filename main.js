@@ -1,12 +1,13 @@
 /**
  * TERMINAL V6: ARCHITECT HYPER-DRIVE
- * Final Build: Hot-Reload + Interaction Handlers
+ * Final Build: Instant Panels + Zero-Footprint Logic
  */
 
 require('dotenv').config();
 const { 
     Client, GatewayIntentBits, Partials, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, PermissionFlagsBits 
+    ButtonBuilder, ButtonStyle, PermissionFlagsBits,
+    ModalBuilder, TextInputBuilder, TextInputStyle // Added for Panel
 } = require('discord.js');
 const mongoose = require('mongoose');
 const express = require('express');
@@ -153,18 +154,52 @@ client.on('messageCreate', async (m) => {
 });
 
 // ==========================================
-// [07] INTERACTION LISTENER (FIXED)
+// [07] INTERACTION LISTENER (FIXED SUBMISSION)
 // ==========================================
 client.on('interactionCreate', async (i) => {
-    if (!i.isButton()) return;
+    // 1. OPEN PANEL INSTANTLY (skip reply)
+    if (i.isButton() && i.customId === 'submit_content') {
+        const modal = new ModalBuilder()
+            .setCustomId('submission_modal')
+            .setTitle('Content Submission Portal');
 
-    if (i.customId === 'submit_content') {
-        // Ack the interaction immediately to stop "Interaction Failed"
-        await i.reply({ 
-            content: "📂 **PORTAL_OPEN:** Upload your media or provide a link below. Staff will be notified.", 
-            ephemeral: true 
+        const linkInput = new TextInputBuilder()
+            .setCustomId('content_link')
+            .setLabel("Paste your link here")
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('https://...')
+            .setRequired(true);
+
+        const descInput = new TextInputBuilder()
+            .setCustomId('content_desc')
+            .setLabel("Short Description")
+            .setStyle(TextInputStyle.Paragraph)
+            .setRequired(false);
+
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(linkInput),
+            new ActionRowBuilder().addComponents(descInput)
+        );
+
+        await i.showModal(modal);
+    }
+
+    // 2. HANDLE SUBMISSION + 15s AUTO-DELETE
+    if (i.isModalSubmit() && i.customId === 'submission_modal') {
+        const link = i.fields.getTextInputValue('content_link');
+        
+        // Public confirmation so we can delete it later
+        const confirmation = await i.reply({ 
+            content: `✅ **SUBMISSION_RECEIVED:** Thank you, ${i.user.username}. This message will vanish in 15s.`, 
+            fetchReply: true 
         });
-        State.log("PORTAL", `${i.user.username} accessed Submission Portal.`);
+
+        // 15-Second Auto-Delete
+        setTimeout(() => {
+            confirmation.delete().catch(() => {});
+        }, 15000);
+
+        State.log("SUBMISSION", `${i.user.username} submitted a link via Panel.`);
     }
 });
 
