@@ -27,14 +27,6 @@ const CONFIG = {
     }
 };
 
-// --- 🌐 R2 CLOUD UPLINK ---
-const r2 = new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: { accessKeyId: process.env.R2_ACCESS_KEY, secretAccessKey: process.env.R2_SECRET_KEY }
-});
-
-// --- 🗄️ DATABASE ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: String,
     username: String,
@@ -46,13 +38,20 @@ const User = mongoose.model('User', new mongoose.Schema({
     lastCommand: { type: Date, default: 0 }
 }));
 
-const client = new Client({ intents: [3276799], partials: [Partials.Channel, Partials.GuildMember] });
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent, 
+        GatewayIntentBits.GuildMembers
+    ], 
+    partials: [Partials.Channel, Partials.GuildMember] 
+});
 
-// --- 🚀 MESSAGE COMMANDS (GLOBAL ACCESS) ---
+// --- 🚀 MESSAGE COMMANDS (GLOBAL ACCESS FIXED) ---
 client.on("messageCreate", async (m) => {
     if (m.author.bot || !m.guild) return;
     
-    // Auto-profile generation for all users
     let u = await User.findOneAndUpdate(
         { discordId: m.author.id }, 
         { username: m.author.username }, 
@@ -64,21 +63,30 @@ client.on("messageCreate", async (m) => {
     const args = m.content.slice(1).trim().split(/ +/g);
     const cmd = args.shift().toLowerCase();
 
-    // !code - Now works for everyone with the key
+    // !submit - FORCED PUBLIC VISIBILITY
+    if (cmd === 'submit') {
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('open_modal')
+                .setLabel('OPEN SUBMISSION PANEL')
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji('📥')
+        );
+
+        // Sending to channel instead of reply to bypass certain visibility restrictions
+        return m.channel.send({ 
+            content: `### ⚡ OPERATIVE_UPLINK\n<@${m.author.id}>, initialize your submission dossier below.`, 
+            components: [row] 
+        });
+    }
+
+    // !code - Re-added for global use
     if (cmd === 'code') {
         if (args[0] === CONFIG.ADMIN_PASS) {
             await User.updateOne({ discordId: m.author.id }, { $set: { premiumCode: args[0] } });
-            return m.reply("💎 **PREMIUM_ACCESS_GRANTED:** Hardware priority engaged.");
+            return m.reply("💎 **PREMIUM_ACCESS_GRANTED**");
         }
         return m.reply("❌ **INVALID_KEY**");
-    }
-
-    // !submit - Now works for everyone
-    if (cmd === 'submit') {
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('open_modal').setLabel('OPEN SUBMISSION PANEL').setStyle(ButtonStyle.Primary)
-        );
-        return m.reply({ content: "⭐ **OPERATIVE_UPLINK:** Submission channel ready.", components: [row] });
     }
 
     if (cmd === 'profile') {
@@ -86,25 +94,35 @@ client.on("messageCreate", async (m) => {
     }
 });
 
-// --- ⚡ INTERACTION HANDLER ---
+// --- ⚡ INTERACTION HANDLER (MODALS & RANKING) ---
 client.on('interactionCreate', async (i) => {
-    // Open Modal (Global)
+    // Open Modal
     if (i.isButton() && i.customId === 'open_modal') {
         const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('SUBMIT EDIT');
-        const linkInput = new TextInputBuilder().setCustomId('url').setLabel("STREAMABLE LINK").setStyle(TextInputStyle.Short).setRequired(true);
+        const linkInput = new TextInputBuilder()
+            .setCustomId('url')
+            .setLabel("STREAMABLE LINK")
+            .setStyle(TextInputStyle.Short)
+            .setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(linkInput));
         return i.showModal(modal);
     }
 
-    // Modal Submission (Global)
+    // Modal Submission
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
         const link = i.fields.getTextInputValue('url');
         const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
-        const btns = Object.keys(CONFIG.RANKS).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary));
         
+        const btns = Object.keys(CONFIG.RANKS).map(r => 
+            new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary)
+        );
+
         await rChan.send({ 
             content: `📥 **NEW_SUBMISSION:** <@${i.user.id}>\n**URL:** ${link}`, 
-            components: [new ActionRowBuilder().addComponents(btns.slice(0, 3)), new ActionRowBuilder().addComponents(btns.slice(3))] 
+            components: [
+                new ActionRowBuilder().addComponents(btns.slice(0, 3)), 
+                new ActionRowBuilder().addComponents(btns.slice(3))
+            ] 
         });
         return i.reply({ content: "✅ **UPLINK_SENT**", ephemeral: true });
     }
@@ -128,7 +146,7 @@ client.on('interactionCreate', async (i) => {
     }
 });
 
-// --- 🛰️ HYPER-DRIVE BOOT SYSTEM ---
+// --- 🛰️ CRAZY BOOT SYSTEM (HYPER-DRIVE) ---
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -146,17 +164,16 @@ async function boot() {
     \u001b[0m`.bold);
 
     const stages = ["NEURAL_SYNC", "R2_UPLINK", "MONGO_ATLAS", "DISCORD_GATEWAY", "FFMPEG_4K"];
-
     for (const stage of stages) {
         process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(15)} : `);
-        await sleep(500);
+        await sleep(400);
         process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
     }
 
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;35m[!] SINGULARITY_6.2_ACTIVE : ALL OPERATIVES AUTHORIZED\u001b[0m\n`);
+        console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE : GLOBAL ACCESS STABILIZED\u001b[0m\n`);
     } catch (e) { console.log(e); }
 }
 
