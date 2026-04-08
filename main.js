@@ -1,186 +1,222 @@
+/**
+ * TERMINAL V6: ARCHITECT HYPER-DRIVE
+ * Final Integration: Diagnostic Boot + Render Queue + WebSocket Dashboard
+ */
+
 require('dotenv').config();
 const { 
     Client, GatewayIntentBits, Partials, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
-    TextInputStyle, AttachmentBuilder 
+    ButtonBuilder, ButtonStyle, PermissionFlagsBits 
 } = require('discord.js');
 const mongoose = require('mongoose');
 const express = require('express');
-const colors = require('colors');
+const http = require('http');
+const { Server } = require('socket.io');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
+const path = require('path');
+const colors = require('colors');
+const { execSync } = require('child_process');
+const os = require('os');
 
-// --- ⚙️ CONFIGURATION ---
-const CONFIG = {
-    MAIN_GUILD: "1488203882130837704",    
-    REVIEW_GUILD: "1488868987805892730",  
-    REVIEW_CHAN: "1489069664414859326",   
-    ADMIN_KEY: process.env.ADMIN_KEY || "OMEGA_SECURE_123",
-    PURGE_DELAY: 15000,
-    RANKS: {
-        "SSS": { id: "1488208025859788860", elo: 100 },
-        "SS+": { id: "1488208185633280041", elo: 75 },
-        "SS":  { id: "1488208281930432602", elo: 50 },
-        "S+":  { id: "1488208494170738793", elo: 40 },
-        "S":   { id: "1488208584142753863", elo: 25 },
-        "A":   { id: "1488208696759685190", elo: 10 }
-    }
+// ==========================================
+// [01] CONFIGURATION
+// ==========================================
+const SETTINGS = {
+    OWNERS: ["1399094217846030346", "1347959266539081768"],
+    ADMIN_PASS: "angieloveschicken",
+    PORT: process.env.PORT || 3000
 };
 
-// --- 🗄️ DATABASE ---
+// ==========================================
+// [02] DATABASE MODELS
+// ==========================================
 const User = mongoose.model('User', new mongoose.Schema({
-    discordId: String,
+    discordId: { type: String, index: true, unique: true },
     username: String,
     rank: { type: String, default: "None" },
-    xp: { type: Number, default: 0 },
-    level: { type: Number, default: 1 },
-    elo: { type: Number, default: 0 },
-    submissions: [{ rank: String, date: Date, eloGained: Number }],
-    premiumCode: { type: String, default: null },
-    hasUsedFreeRender: { type: Boolean, default: false }
+    elo: { type: Number, default: 0, index: -1 },
+    hasUsedFreeRender: { type: Boolean, default: false },
+    premiumCode: { type: String, default: null }
 }));
 
-let feed = [];
-const client = new Client({ intents: [3276799], partials: [Partials.Channel, Partials.GuildMember] });
-const app = express(); app.use(express.json());
+const GlobalSettings = mongoose.model('Settings', new mongoose.Schema({
+    toggles: { type: Map, of: Boolean, default: {} }
+}));
 
-// --- 🛡️ KERNEL MODULES ---
-const Kernel = {
-    logFeed: (type, msg) => {
-        feed.unshift({ type, msg, time: Date.now() });
-        if (feed.length > 20) feed.pop();
-    },
-    autoPurge: (msgs) => {
-        setTimeout(() => msgs.forEach(m => m?.deletable && m.delete().catch(() => {})), CONFIG.PURGE_DELAY);
-    },
-    getCmd: (str) => ['quality', 'submit', 'rankcard', 'serverstats'].find(c => str.toLowerCase().includes(c))
+// ==========================================
+// [03] SYSTEM STATE & TELEMETRY
+// ==========================================
+const State = {
+    feed: [],
+    cmdCache: new Map(),
+    io: null,
+    log(type, msg) {
+        const entry = { type, msg, time: Date.now() };
+        this.feed.unshift(entry);
+        if (this.feed.length > 25) this.feed.pop();
+        if (this.io) this.io.emit('telemetry', entry);
+        console.log(`[${type}]`.cyan + ` ${msg}`);
+    }
 };
 
-// --- 🌐 API ROUTES ---
-app.get('/api/status', (req, res) => res.json({ online: client.isReady(), ping: client.ws.ping }));
-app.get('/api/dashboard', async (req, res) => {
-    const stats = await User.aggregate([{ $group: { _id: null, users: { $sum: 1 }, elo: { $sum: "$elo" } } }]);
-    res.json({ users: stats[0]?.users || 0, totalElo: stats[0]?.elo || 0, liveFeed: feed });
-});
-app.get('/api/leaderboard', async (req, res) => {
-    const top = await User.find().sort({ elo: -1 }).limit(50);
-    res.json(top.map((u, i) => ({ pos: i+1, name: u.username, elo: u.elo, rank: u.rank })));
-});
+// ==========================================
+// [04] APEX RENDER ENGINE
+// ==========================================
+const RenderEngine = {
+    queue: [],
+    busy: false,
+    async add(message, url, user, statusMsg) {
+        this.queue.push({ message, url, user, statusMsg });
+        State.log("QUEUE", `Position #${this.queue.length} for ${user.username}`);
+        if (State.io) State.io.emit('queue_size', this.queue.length);
+        this.process();
+    },
+    async process() {
+        if (this.busy || !this.queue.length) return;
+        this.busy = true;
+        const job = this.queue.shift();
+        const out = path.join(__dirname, `temp_${job.message.id}.mp4`);
+        if (State.io) State.io.emit('queue_size', this.queue.length);
 
-// --- 🚀 BOT CORE ---
-client.on("messageCreate", async (m) => {
-    if (m.author.bot || m.guildId !== CONFIG.MAIN_GUILD) return;
+        job.statusMsg.edit("💠 **ENGINE_RUNNING: 4K_OVERDRIVE**");
 
-    const u = await User.findOneAndUpdate(
-        { discordId: m.author.id }, 
-        { username: m.author.username, $inc: { xp: 5 } }, 
-        { upsert: true, new: true }
-    );
-
-    const cmd = m.content.startsWith('!') ? Kernel.getCmd(m.content.slice(1)) : null;
-    if (!cmd) return;
-
-    if (cmd === 'quality') {
-        if (!u.premiumCode && (u.level < 20 || u.hasUsedFreeRender)) return m.reply("❌ Level 20 or Boost required.");
-        const att = m.attachments.first();
-        if (!att?.contentType?.startsWith('video')) return m.reply("⚠️ Attach a video file.");
-
-        const status = await m.reply("⚙️ **UPSCALE_INIT...**");
-        const out = `./out_${m.id}.mp4`;
-
-        ffmpeg(att.url).outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 18", "-preset superfast"])
+        ffmpeg(job.url)
+            .outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 18", "-preset superfast"])
+            .on('error', (err) => {
+                State.log("ERROR", `Render failed: ${err.message}`);
+                job.statusMsg.edit("❌ **SYSTEM_ERROR:** Sequence aborted.");
+                this.cleanup(out);
+            })
             .on('end', async () => {
-                await m.author.send({ content: "✅ 4K Render Complete", files: [out] }).catch(() => {});
-                status.edit("🟢 Done. Check DMs.");
-                Kernel.logFeed("RENDER", `${m.author.username} finished upscale.`);
-                if (!u.premiumCode) { u.hasUsedFreeRender = true; await u.save(); }
-                if (fs.existsSync(out)) fs.unlinkSync(out);
-                Kernel.autoPurge([m, status]);
+                await job.message.author.send({ content: "✅ **4K_RENDER_COMPLETE**", files: [out] }).catch(() => {});
+                job.statusMsg.edit("🟢 **SUCCESS:** Check DMs.");
+                State.log("SUCCESS", `Render delivered to ${job.user.username}`);
+                if (!job.user.premiumCode) {
+                    job.user.hasUsedFreeRender = true;
+                    await job.user.save();
+                }
+                this.cleanup(out);
             }).save(out);
-    } else {
-        let response;
-        if (cmd === "rankcard") response = await m.reply(`\`\`\`ansi\n\u001b[1;35m🤖 IDENTITY: ${m.author.username}\u001b[0m\nRANK: ${u.rank} | ELO: ${u.elo}\n\`\`\``);
-        if (cmd === "submit") response = await m.reply({ 
-            content: "🧠 **Awaiting payload...**", 
-            components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('sub').setLabel('UPLOAD').setStyle(ButtonStyle.Danger))] 
-        });
-        if (response) Kernel.autoPurge([m, response]);
+    },
+    cleanup(file) {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+        this.busy = false;
+        this.process();
+    }
+};
+
+// ==========================================
+// [05] NETWORKING & DISCORD SETUP
+// ==========================================
+const client = new Client({ intents: [3276799], partials: [Partials.Channel, Partials.GuildMember] });
+const app = express();
+const server = http.createServer(app);
+State.io = new Server(server);
+
+app.use(express.json());
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'dashboard.html')));
+
+app.get('/api/init', async (req, res) => {
+    const stats = await User.aggregate([{ $group: { _id: null, users: { $sum: 1 }, elo: { $sum: "$elo" } } }]);
+    res.json({ users: stats[0]?.users || 0, elo: stats[0]?.elo || 0, feed: State.feed, toggles: Object.fromEntries(State.cmdCache) });
+});
+
+app.post('/api/admin/toggle', async (req, res) => {
+    if (req.body.password !== SETTINGS.ADMIN_PASS) return res.status(403).send("DENIED");
+    const s = await GlobalSettings.findOne();
+    s.toggles.set(req.body.command, req.body.state);
+    await s.save();
+    State.cmdCache = s.toggles;
+    State.io.emit('sync_toggles', Object.fromEntries(State.cmdCache));
+    res.json({ success: true });
+});
+
+client.on('messageCreate', async (m) => {
+    if (m.author.bot || !m.content.startsWith('!')) return;
+    const args = m.content.slice(1).trim().split(/ +/);
+    const cmd = args.shift().toLowerCase();
+    if (State.cmdCache.get(cmd) === false && !SETTINGS.OWNERS.includes(m.author.id)) return m.reply("🔒 **LOCKED**");
+
+    if (cmd === "quality") {
+        const u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username }, { upsert: true, new: true });
+        if (!u.premiumCode && (u.level < 20 || u.hasUsedFreeRender)) return m.reply("❌ Level 20+ Required.");
+        const video = m.attachments.first();
+        if (!video?.contentType?.startsWith('video')) return m.reply("⚠️ Attach a video.");
+        RenderEngine.add(m, video.url, u, await m.reply("🛰️ **ANALYZING...**"));
+    }
+    if (cmd === "rankcard") {
+        const data = await User.findOne({ discordId: m.author.id });
+        m.reply(`\`\`\`ansi\n\u001b[1;36m[USER]:\u001b[0m ${m.author.username}\n\u001b[1;35m[ELO]:\u001b[0m ${data?.elo || 0}\`\`\``);
     }
 });
 
-// --- ⚡ INTERACTION HANDLER ---
-client.on('interactionCreate', async (i) => {
-    const [action, target, uid] = i.customId.split('_');
-
-    if (i.customId === 'sub') {
-        const modal = new ModalBuilder().setCustomId('mod_sub').setTitle('DATA UPLOAD');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('link').setLabel('VIDEO LINK').setStyle(1).setRequired(true)));
-        return i.showModal(modal);
-    }
-
-    if (i.isModalSubmit()) {
-        if (i.customId === 'mod_sub') {
-            const url = i.fields.getTextInputValue('link');
-            const chan = client.guilds.cache.get(CONFIG.REVIEW_GUILD)?.channels.cache.get(CONFIG.REVIEW_CHAN);
-            const r1 = new ActionRowBuilder().addComponents(Object.keys(CONFIG.RANKS).slice(0,3).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Primary)));
-            const r2 = new ActionRowBuilder().addComponents(Object.keys(CONFIG.RANKS).slice(3).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Primary)));
-            await chan.send({ content: `🧠 **SUBMISSION:** <@${i.user.id}>\n${url}`, components: [r1, r2] });
-            return i.reply({ content: "✅ Transmitted.", ephemeral: true });
-        }
-        if (i.customId.startsWith('mod_msg_')) {
-            const user = await client.users.fetch(uid).catch(() => null);
-            if (user) await user.send(`📝 **STAFF FEEDBACK:** ${i.fields.getTextInputValue('txt')}`).catch(() => {});
-            return i.reply({ content: "✅ Feedback Sent.", ephemeral: true });
-        }
-    }
-
-    if (action === 'sel') {
-        const rData = CONFIG.RANKS[target];
-        const member = await client.guilds.cache.get(CONFIG.MAIN_GUILD)?.members.fetch(uid).catch(() => null);
-        await User.findOneAndUpdate({ discordId: uid }, { rank: target, $inc: { elo: rData.elo }, $push: { submissions: { rank: target, date: new Date(), eloGained: rData.elo } } });
-        
-        if (member) {
-            await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
-            await member.roles.add(rData.id).catch(() => {});
-            member.send(`✅ **RANKED:** You are now **${target}** (+${rData.elo} ELO).`).catch(() => {});
-        }
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`msg_ask_${uid}`).setLabel('✍️ ADD FEEDBACK').setStyle(ButtonStyle.Success));
-        await i.update({ content: `✅ Ranked <@${uid}> to **${target}**.`, components: [row] });
-    }
-
-    if (action === 'msg') {
-        const modal = new ModalBuilder().setCustomId(`mod_msg_${uid}`).setTitle('FEEDBACK');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('txt').setLabel('MESSAGE').setStyle(2).setRequired(true)));
-        await i.showModal(modal);
-    }
-});
-
-// --- 🛰️ BOOT ---
+// ==========================================
+// [06] THE HYPER-DRIVE BOOT SYSTEM
+// ==========================================
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    const step = async (n) => {
-        process.stdout.write(`⚙️ ${n.padEnd(30)} `);
-        for (let i = 0; i <= 100; i += 25) {
-            process.stdout.write(`\r⚙️ ${n.padEnd(30)} [${"▰".repeat(i/5).magenta}${"▱".repeat(20-i/5).gray}] ${i}%`);
-            await sleep(60);
-        }
-        console.log(" ✅".green);
+    
+    // Hardware Diagnostic
+    const totalRAM = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
+    const cpuModel = os.cpus()[0].model.split('@')[0].trim();
+
+    console.log(`
+    ██████╗ ███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
+    ██╔══██╗██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗██║     
+    ██████╔╝█████╗  ██████╔╝██╔████╔██║██║██╔██╗ ██║███████║██║     
+    ██╔══██╗██╔══╝  ██╔══██╗██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║     
+    ██████╔╝███████╗██║  ██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗
+    ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝`.cyan.bold);
+
+    console.log(`\n ${" SYSTEM DIAGNOSTIC ".bgCyan.black.bold} `);
+    console.log(` 🛰️  HOST: ${os.hostname().yellow} | 🧠  CORE: ${cpuModel.dim} | 📟  MEM: ${totalRAM}GB`);
+    console.log("-".repeat(65).dim);
+
+    // Environmental Checks
+    const check = (n, c) => {
+        process.stdout.write(` > CHECKING ${n.padEnd(20)} `);
+        const res = c();
+        console.log(` [ ${res ? "PASSED".green.bold : "FAILED".red.bold} ]`);
+        return res;
     };
 
-    console.log(`\n${"████████╗███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗ ██╗".magenta}\n${"╚══██╔══╝██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗██║".magenta}\n${"   ██║   █████╗  ██████╔╝██╔████╔██║██║██╔██╗ ██║███████║██║".magenta}\n${"   ██║   ██╔══╝  ██╔══██╗██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║".magenta}\n${"   ██║   ███████╗██║  ██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗".magenta}\n${"   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝".magenta}\n\n${"🧠 >>> TERMINAL ACTIVATED <<<".cyan}\n`);
-    
-    await step("Kernel Engine"); await step("Database Link"); await step("API Core"); await step("Discord Gateway");
+    if (!check("ENVIRONMENT_VARS", () => process.env.DISCORD_TOKEN && process.env.MONGO_URI)) process.exit(1);
+    check("FFMPEG_BINARY", () => { try { execSync('ffmpeg -version', { stdio: 'ignore' }); return true; } catch(e) { return false; } });
 
-    try {
-        await mongoose.connect(process.env.MONGO_URI);
-        app.listen(process.env.PORT || 3000);
-        client.once('ready', () => {
-            console.log(`\n${"🟢 >>> LINK ESTABLISHED <<<".cyan}\n🤖 ${client.user.tag}\n`);
-            client.user.setActivity(`TERMINAL v21`, { type: 3 });
-        });
-        await client.login(process.env.DISCORD_TOKEN);
-    } catch (e) { console.log("❌ CRITICAL ERROR: ".red + e.message); }
+    console.log("-".repeat(65).dim);
+    console.log(`\n ${" INITIALIZING NEURAL LINK ".bgMagenta.white.bold} `);
+
+    const tasks = [
+        { id: "DB_SYNC", op: () => mongoose.connect(process.env.MONGO_URI) },
+        { id: "WEB_CORE", op: () => server.listen(SETTINGS.PORT) },
+        { id: "CACHE_INT", op: async () => {
+            const s = await GlobalSettings.findOne() || await GlobalSettings.create({});
+            State.cmdCache = s.toggles;
+        }},
+        { id: "DISCORD_API", op: () => client.login(process.env.DISCORD_TOKEN) }
+    ];
+
+    for (const task of tasks) {
+        process.stdout.write(` ⚙️  ESTABLISHING ${task.id.padEnd(12)}... `);
+        try {
+            await task.op();
+            process.stdout.write(`${"STABLE".green.bold}\n`);
+            await sleep(150);
+        } catch (e) {
+            process.stdout.write(`${"CRASHED".red.bold}\n`);
+            console.log(`   └─ Error: ${e.message}`.red.dim);
+            process.exit(1);
+        }
+    }
+
+    console.log("\n" + "=".repeat(65).cyan);
+    console.log(` ${" SYSTEM STATUS: OPTIMAL ".bgGreen.black.bold} `);
+    console.log(` 👤 IDENTITY: ${client.user.tag.cyan} | 🌐 PORT: ${SETTINGS.PORT}`);
+    console.log("=".repeat(65).cyan + "\n");
+    
+    State.log("SYSTEM", "Architect V6 Integrated Hyper-Drive Online.");
 }
 
 boot();
