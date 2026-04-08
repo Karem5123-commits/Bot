@@ -23,7 +23,6 @@ const CONFIG = {
     }
 };
 
-// FIXED SCHEMA
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: { type: String, required: true, unique: true },
     username: String,
@@ -36,30 +35,43 @@ const client = new Client({
     partials: [Partials.Channel, Partials.GuildMember] 
 });
 
+// --- 🧹 AUTO-DELETE FUNCTION ---
+const purge = (msg, time = 10000) => {
+    setTimeout(() => {
+        msg.delete().catch(() => {});
+    }, time);
+};
+
 // --- 🚀 MESSAGE COMMANDS ---
 client.on("messageCreate", async (m) => {
     if (m.author.bot || !m.guild) return;
-
     if (!m.content.startsWith('!')) return;
+
     const args = m.content.slice(1).trim().split(/ +/g);
     const cmd = args.shift().toLowerCase();
+
+    // Delete the user's command immediately or after 10s
+    purge(m);
 
     if (cmd === 'leaderboard' || cmd === 'lb') {
         const topUsers = await User.find().sort({ elo: -1 }).limit(10);
         let desc = topUsers.map((u, i) => `**${i+1}.** ${u.username} ┃ \`${u.rank}\` ┃ \`${u.elo} ELO\``).join('\n');
-        return m.channel.send({ embeds: [new EmbedBuilder().setTitle("🏆 GLOBAL LEADERBOARD").setColor("#00FFCC").setDescription(desc || "No data.")] });
+        const reply = await m.channel.send({ embeds: [new EmbedBuilder().setTitle("🏆 GLOBAL LEADERBOARD").setColor("#00FFCC").setDescription(desc || "No data.")] });
+        return purge(reply);
     }
 
     if (cmd === 'submit') {
         const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_modal').setLabel('SUBMIT EDIT').setStyle(ButtonStyle.Primary).setEmoji('📥'));
-        return m.channel.send({ content: `### ⚡ OPERATIVE_UPLINK\n<@${m.author.id}>, initialize dossier.`, components: [row] });
+        const reply = await m.channel.send({ content: `### ⚡ OPERATIVE_UPLINK\n<@${m.author.id}>, initialize dossier.`, components: [row] });
+        return purge(reply);
     }
 
     if (cmd === 'rankcard' || cmd === 'profile') {
         let u = await User.findOne({ discordId: m.author.id });
         if (!u) u = await User.create({ discordId: m.author.id, username: m.author.username });
         const embed = new EmbedBuilder().setTitle(`DATALINK: ${u.username}`).setColor(CONFIG.RANKS[u.rank]?.color || '#FFFFFF').addFields({ name: 'RANK', value: `\`${u.rank}\``, inline: true }, { name: 'ELO', value: `\`${u.elo}\``, inline: true });
-        return m.reply({ embeds: [embed] });
+        const reply = await m.reply({ embeds: [embed] });
+        return purge(reply);
     }
 });
 
@@ -98,33 +110,17 @@ client.on('interactionCreate', async (i) => {
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    
-    console.log(`
-    \u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...
-    \u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...
-    \u001b[1;35m
-    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
-    ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
-    ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ 
-    ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  
-    ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   
-    ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
-    \u001b[0m`.bold);
-
+    console.log(`\u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...\n\u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...\n\u001b[1;35m    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n    ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝\n    ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ \n    ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  \n    ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   \n    ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝\u001b[0m`);
     const stages = ["NEURAL_SYNC", "R2_UPLINK", "MONGO_ATLAS", "DISCORD_GATEWAY"];
     for (const stage of stages) {
         process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(15)} : `);
         await sleep(400);
         process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
     }
-
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE : GLOBAL ACCESS STABILIZED\u001b[0m\n`);
-    } catch (e) { 
-        console.log(`\n\u001b[1;31m[!] BOOT_FAILURE: ${e.message}\u001b[0m`); 
-    }
+        console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE\u001b[0m\n`);
+    } catch (e) { console.log(`\n\u001b[1;31m[!] BOOT_FAILURE: ${e.message}\u001b[0m`); }
 }
-
 boot();
