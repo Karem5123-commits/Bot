@@ -16,8 +16,6 @@ const CONFIG = {
     REVIEW_CHAN: process.env.REVIEW_CHANNEL_ID,
     LOG_CHAN: process.env.LOG_CHANNEL_ID,
     OWNERS: process.env.OWNER_IDS?.split(',') || [],
-    R2_BUCKET: process.env.R2_BUCKET,
-    BASE_URL: process.env.BASE_URL,
     ADMIN_PASS: process.env.ADMIN_KEY,
     RANKS: {
         "SSS": { id: "1488208025859788860", elo: 100 },
@@ -36,7 +34,7 @@ const r2 = new S3Client({
     credentials: { accessKeyId: process.env.R2_ACCESS_KEY, secretAccessKey: process.env.R2_SECRET_KEY }
 });
 
-// --- 🗄️ DATABASE SCHEMA ---
+// --- 🗄️ DATABASE ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: String,
     username: String,
@@ -50,33 +48,37 @@ const User = mongoose.model('User', new mongoose.Schema({
 
 const client = new Client({ intents: [3276799], partials: [Partials.Channel, Partials.GuildMember] });
 
-// --- 🛡️ KERNEL & QUEUE ---
-let renderQueue = [];
-let isRendering = false;
-
-// --- 🚀 MESSAGE COMMANDS (!code, !submit, !quality) ---
+// --- 🚀 MESSAGE COMMANDS (GLOBAL ACCESS) ---
 client.on("messageCreate", async (m) => {
     if (m.author.bot || !m.guild) return;
-    let u = await User.findOneAndUpdate({ discordId: m.author.id }, { username: m.author.username }, { upsert: true, new: true });
+    
+    // Auto-profile generation for all users
+    let u = await User.findOneAndUpdate(
+        { discordId: m.author.id }, 
+        { username: m.author.username }, 
+        { upsert: true, new: true }
+    );
 
     if (u.isShadowBanned || !m.content.startsWith('!')) return;
 
     const args = m.content.slice(1).trim().split(/ +/g);
     const cmd = args.shift().toLowerCase();
 
+    // !code - Now works for everyone with the key
     if (cmd === 'code') {
         if (args[0] === CONFIG.ADMIN_PASS) {
             await User.updateOne({ discordId: m.author.id }, { $set: { premiumCode: args[0] } });
-            return m.reply("💎 **PREMIUM_ACCESS_GRANTED**");
+            return m.reply("💎 **PREMIUM_ACCESS_GRANTED:** Hardware priority engaged.");
         }
         return m.reply("❌ **INVALID_KEY**");
     }
 
+    // !submit - Now works for everyone
     if (cmd === 'submit') {
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('open_modal').setLabel('OPEN SUBMISSION PANEL').setStyle(ButtonStyle.Primary)
         );
-        return m.reply({ content: "⭐ **OPERATIVE_UPLINK:**", components: [row] });
+        return m.reply({ content: "⭐ **OPERATIVE_UPLINK:** Submission channel ready.", components: [row] });
     }
 
     if (cmd === 'profile') {
@@ -84,8 +86,9 @@ client.on("messageCreate", async (m) => {
     }
 });
 
-// --- ⚡ INTERACTION HANDLER (MODALS & RANKING) ---
+// --- ⚡ INTERACTION HANDLER ---
 client.on('interactionCreate', async (i) => {
+    // Open Modal (Global)
     if (i.isButton() && i.customId === 'open_modal') {
         const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('SUBMIT EDIT');
         const linkInput = new TextInputBuilder().setCustomId('url').setLabel("STREAMABLE LINK").setStyle(TextInputStyle.Short).setRequired(true);
@@ -93,18 +96,25 @@ client.on('interactionCreate', async (i) => {
         return i.showModal(modal);
     }
 
+    // Modal Submission (Global)
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
         const link = i.fields.getTextInputValue('url');
         const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
         const btns = Object.keys(CONFIG.RANKS).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary));
+        
         await rChan.send({ 
             content: `📥 **NEW_SUBMISSION:** <@${i.user.id}>\n**URL:** ${link}`, 
             components: [new ActionRowBuilder().addComponents(btns.slice(0, 3)), new ActionRowBuilder().addComponents(btns.slice(3))] 
         });
-        return i.reply({ content: "✅ **SENT**", ephemeral: true });
+        return i.reply({ content: "✅ **UPLINK_SENT**", ephemeral: true });
     }
 
+    // Ranking Buttons (Staff Only)
     if (i.isButton() && i.customId.startsWith('sel_')) {
+        if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles) && !CONFIG.OWNERS.includes(i.user.id)) {
+            return i.reply({ content: "🚫 **ACCESS_DENIED**", ephemeral: true });
+        }
+
         const [_, rank, uid] = i.customId.split('_');
         const rankData = CONFIG.RANKS[rank];
         const member = await i.guild.members.fetch(uid).catch(() => null);
@@ -118,14 +128,14 @@ client.on('interactionCreate', async (i) => {
     }
 });
 
-// --- 🛰️ THE CRAZY BOOT SYSTEM V2 ---
+// --- 🛰️ HYPER-DRIVE BOOT SYSTEM ---
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     
     console.log(`
-    \u001b[1;31m  [!] CRITICAL_OVERLOAD_DETECTED...
-    \u001b[1;33m  [!] BYPASSING SECURITY PROTOCOLS...
+    \u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...
+    \u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...
     \u001b[1;35m
     ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
     ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
@@ -135,27 +145,19 @@ async function boot() {
     ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
     \u001b[0m`.bold);
 
-    const diagnostics = [
-        { label: "NEURAL_CORE", action: "Calibrating..." },
-        { label: "MONGODB_ATLAS", action: "Establishing Tunnel..." },
-        { label: "CLOUDFLARE_R2", action: "Syncing S3 Buckets..." },
-        { label: "DISCORD_GW", action: "Piercing Firewall..." },
-        { label: "FFMPEG_ENGINE", action: "Spinning Up 4K Logic..." }
-    ];
+    const stages = ["NEURAL_SYNC", "R2_UPLINK", "MONGO_ATLAS", "DISCORD_GATEWAY", "FFMPEG_4K"];
 
-    for (const item of diagnostics) {
-        process.stdout.write(` \u001b[1;37m[#] INITIATING ${item.label.padEnd(15)} : ${item.action}`);
-        await sleep(400);
-        process.stdout.write(` \u001b[1;32m [ SUCCESS ]\n\u001b[0m`);
+    for (const stage of stages) {
+        process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(15)} : `);
+        await sleep(500);
+        process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
     }
-
-    console.log(`\n \u001b[1;37m[>] VERSION: \u001b[1;35m6.2.0-SINGULARITY`);
-    console.log(` \u001b[1;37m[>] STATUS:  \u001b[1;32mFULLY OPERATIONAL\n`);
 
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-    } catch (e) { console.log(`\u001b[1;31m[FATAL] BOOT_SEQUENCE_ABORTED: ${e.message}\u001b[0m`); }
+        console.log(`\n \u001b[1;35m[!] SINGULARITY_6.2_ACTIVE : ALL OPERATIVES AUTHORIZED\u001b[0m\n`);
+    } catch (e) { console.log(e); }
 }
 
 boot();
