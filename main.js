@@ -1,16 +1,14 @@
 require('dotenv').config();
 const { 
-    Client, GatewayIntentBits, Partials, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
-    TextInputStyle, EmbedBuilder, PermissionsBitField, ChannelType 
+    Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
+    ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder, REST, Routes, ChannelType 
 } = require('discord.js');
 const mongoose = require('mongoose');
-const colors = require('colors');
 
-// --- ⚙️ MASTER CONFIG ---
+// --- ⚙️ CONFIGURATION ---
 const CONFIG = {
+    CLIENT_ID: "1479871879496994943",
     MAIN_GUILD: "1491541282156449794",
-    REVIEW_GUILD: "1488868987805892730",
     REVIEW_CHAN: "1489069664414859326",
     OWNERS: ["1347959266539081768", "1407316453060907069"],
     RANKS: {
@@ -23,104 +21,128 @@ const CONFIG = {
     }
 };
 
+// --- 📊 SCHEMA ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: { type: String, required: true, unique: true },
     username: String,
     rank: { type: String, default: "None" },
-    elo: { type: Number, default: 0 }
+    elo: { type: Number, default: 0 },
+    strikes: { type: Number, default: 0 },
+    lastSubmit: { type: Number, default: 0 },
+    reviewCount: { type: Number, default: 0 }
 }));
 
-const client = new Client({ 
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers], 
-    partials: [Partials.Channel, Partials.GuildMember] 
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMembers] });
 
-// --- 🧹 AUTO-DELETE FUNCTION ---
+// --- 🧹 GHOST PURGE TOOL ---
 const purge = (msg, time = 10000) => {
-    setTimeout(() => {
-        msg.delete().catch(() => {});
-    }, time);
+    if (!msg) return;
+    setTimeout(() => msg.delete().catch(() => {}), time);
 };
 
-// --- 🚀 MESSAGE COMMANDS ---
-client.on("messageCreate", async (m) => {
-    if (m.author.bot || !m.guild) return;
-    if (!m.content.startsWith('!')) return;
-
-    const args = m.content.slice(1).trim().split(/ +/g);
-    const cmd = args.shift().toLowerCase();
-
-    // Delete the user's command immediately or after 10s
-    purge(m);
-
-    if (cmd === 'leaderboard' || cmd === 'lb') {
-        const topUsers = await User.find().sort({ elo: -1 }).limit(10);
-        let desc = topUsers.map((u, i) => `**${i+1}.** ${u.username} ┃ \`${u.rank}\` ┃ \`${u.elo} ELO\``).join('\n');
-        const reply = await m.channel.send({ embeds: [new EmbedBuilder().setTitle("🏆 GLOBAL LEADERBOARD").setColor("#00FFCC").setDescription(desc || "No data.")] });
-        return purge(reply);
-    }
-
-    if (cmd === 'submit') {
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_modal').setLabel('SUBMIT EDIT').setStyle(ButtonStyle.Primary).setEmoji('📥'));
-        const reply = await m.channel.send({ content: `### ⚡ OPERATIVE_UPLINK\n<@${m.author.id}>, initialize dossier.`, components: [row] });
-        return purge(reply);
-    }
-
-    if (cmd === 'rankcard' || cmd === 'profile') {
-        let u = await User.findOne({ discordId: m.author.id });
-        if (!u) u = await User.create({ discordId: m.author.id, username: m.author.username });
-        const embed = new EmbedBuilder().setTitle(`DATALINK: ${u.username}`).setColor(CONFIG.RANKS[u.rank]?.color || '#FFFFFF').addFields({ name: 'RANK', value: `\`${u.rank}\``, inline: true }, { name: 'ELO', value: `\`${u.elo}\``, inline: true });
-        const reply = await m.reply({ embeds: [embed] });
-        return purge(reply);
-    }
-});
+// --- 🚀 SLASH COMMANDS ---
+const commands = [
+    { name: 'submit', description: 'Initialize your edit uplink' },
+    { name: 'profile', description: 'Access your operative dossier' },
+    { name: 'leaderboard', description: 'View the elite top 10' }
+];
 
 // --- ⚡ INTERACTION HANDLER ---
 client.on('interactionCreate', async (i) => {
+    // 1. SLASH COMMANDS
+    if (i.isChatInputCommand()) {
+        const u = await User.findOne({ discordId: i.user.id }) || await User.create({ discordId: i.user.id, username: i.user.username });
+
+        if (i.commandName === 'submit') {
+            if (Date.now() - u.lastSubmit < 300000) return i.reply({ content: "⏳ **COOLDOWN:** Wait 5 mins.", ephemeral: true });
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_modal').setLabel('START UPLINK').setStyle(ButtonStyle.Primary));
+            return i.reply({ content: "### ⚡ OPERATIVE_UPLINK", components: [row], ephemeral: true });
+        }
+
+        if (i.commandName === 'profile') {
+            const embed = new EmbedBuilder().setTitle(`DATALINK: ${u.username}`).setColor(CONFIG.RANKS[u.rank]?.color || '#FFFFFF')
+                .addFields({ name: 'RANK', value: `\`${u.rank}\``, inline: true }, { name: 'ELO', value: `\`${u.elo}\``, inline: true });
+            const res = await i.reply({ embeds: [embed], fetchReply: true });
+            return purge(res);
+        }
+
+        if (i.commandName === 'leaderboard') {
+            const top = await User.find().sort({ elo: -1 }).limit(10);
+            const desc = top.map((u, idx) => `**${idx+1}.** ${u.username} ┃ \`${u.rank}\` ┃ \`${u.elo}\``).join('\n');
+            const res = await i.reply({ embeds: [new EmbedBuilder().setTitle("🏆 LEADERBOARD").setDescription(desc || "No data.").setColor("#00FFCC")], fetchReply: true });
+            return purge(res);
+        }
+    }
+
+    // 2. MODAL UPLINK
     if (i.isButton() && i.customId === 'open_modal') {
         const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('SUBMIT EDIT');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel("LINK").setStyle(TextInputStyle.Short).setRequired(true)));
+        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel("URL").setStyle(TextInputStyle.Short).setRequired(true)));
         return i.showModal(modal);
     }
 
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
         const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
-        const btns = Object.keys(CONFIG.RANKS).map(r => new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary));
-        if (rChan) await rChan.send({ content: `📥 **NEW:** <@${i.user.id}>\n**URL:** ${i.fields.getTextInputValue('url')}`, components: [new ActionRowBuilder().addComponents(btns.slice(0, 3)), new ActionRowBuilder().addComponents(btns.slice(3))] });
+        const btns = Object.keys(CONFIG.RANKS).map(r => new ButtonBuilder().setCustomId(`rank_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary));
+        
+        const msg = await rChan.send({ 
+            content: `📥 **NEW SUBMISSION:** <@${i.user.id}>\n${i.fields.getTextInputValue('url')}`, 
+            components: [new ActionRowBuilder().addComponents(btns.slice(0, 3)), new ActionRowBuilder().addComponents(btns.slice(3))] 
+        });
+        await msg.startThread({ name: `Feedback: ${i.user.username}` }); // Auto-Thread
+        await User.findOneAndUpdate({ discordId: i.user.id }, { lastSubmit: Date.now() });
         return i.reply({ content: "✅ **SENT**", ephemeral: true });
     }
 
-    if (i.isButton() && i.customId.startsWith('sel_')) {
-        const [_, rank, uid] = i.customId.split('_');
+    // 3. THE 20x RANKING SYSTEM (ELO SCALING & PROMOTION LOGIC)
+    if (i.isButton() && i.customId.startsWith('rank_')) {
+        const [_, type, uid] = i.customId.split('_');
         const mainGuild = client.guilds.cache.get(CONFIG.MAIN_GUILD);
         const member = await mainGuild?.members.fetch(uid).catch(() => null);
-        if (!member) return i.reply({ content: "❌ USER_NOT_FOUND", ephemeral: true });
+        if (!member) return i.reply({ content: "❌ USER_GONE", ephemeral: true });
 
-        await User.findOneAndUpdate({ discordId: uid }, { rank: rank, $inc: { elo: CONFIG.RANKS[rank].elo } }, { upsert: true });
-        const role = mainGuild.roles.cache.get(CONFIG.RANKS[rank].id);
+        const targetUser = await User.findOne({ discordId: uid });
+        const rankOrder = ["None", "A", "S", "S+", "SS", "SS+", "SSS"];
+        const oldIdx = rankOrder.indexOf(targetUser.rank);
+        const newIdx = rankOrder.indexOf(type);
+
+        // 20x Logic: Dynamic Bonus Calculation
+        let eloChange = CONFIG.RANKS[type].elo;
+        if (newIdx > oldIdx) eloChange = Math.floor(eloChange * 1.5); // 50% Promotion Bonus
+        if (newIdx < oldIdx) eloChange = -Math.abs(eloChange); // Demotion Penalty
+        if (targetUser.elo > 1000) eloChange = Math.floor(eloChange * 0.5); // Decay/Hard-cap scaling
+
+        await User.findOneAndUpdate({ discordId: uid }, { rank: type, $inc: { elo: eloChange } });
+        
+        // Sync Roles
+        const role = mainGuild.roles.cache.get(CONFIG.RANKS[type].id);
         if (role) {
             await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
             await member.roles.add(role);
         }
-        return i.update({ content: `✅ **RANKED:** <@${uid}> to **${rank}**`, components: [] });
+
+        await User.findOneAndUpdate({ discordId: i.user.id }, { $inc: { reviewCount: 1 } }, { upsert: true }); // Staff Tracking
+        return i.update({ content: `✅ **RANKED:** <@${uid}> → **${type}** (\`${eloChange > 0 ? '+' : ''}${eloChange} ELO\`)`, components: [] });
     }
 });
 
-// --- 🛰️ COOL BOOT SYSTEM ---
+// --- 🛰️ BOOT SYSTEM ---
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    console.log(`\u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...\n\u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...\n\u001b[1;35m    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n    ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝\n    ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ \n    ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  \n    ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   \n    ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝\u001b[0m`);
-    const stages = ["NEURAL_SYNC", "R2_UPLINK", "MONGO_ATLAS", "DISCORD_GATEWAY"];
-    for (const stage of stages) {
-        process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(15)} : `);
-        await sleep(400);
-        process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
+    console.log(`\u001b[1;31m[!] BYPASSING FIREWALL...\n\u001b[1;33m[!] INITIATING NEURAL OVERLOAD...\u001b[1;35m\n    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n    ██████╔╝███████╗██████╔╝██║      ██████╔╝╚████╔╝ \n    ██████╔╝███████╗██████╔╝███████╗╚██████╔╝   ██║   \n\u001b[0m`);
+    
+    for (const s of ["MONGO", "GATEWAY", "SLASH_SYNC"]) {
+        process.stdout.write(` [#] ${s.padEnd(12)} : `); await sleep(300);
+        process.stdout.write(`\u001b[1;32m[ STABLE ]\n\u001b[0m`);
     }
+
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE\u001b[0m\n`);
-    } catch (e) { console.log(`\n\u001b[1;31m[!] BOOT_FAILURE: ${e.message}\u001b[0m`); }
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: commands });
+        console.log(`\n\u001b[1;35m[!] SINGULARITY ONLINE\u001b[0m\n`);
+    } catch (e) { console.error(e); }
 }
 boot();
