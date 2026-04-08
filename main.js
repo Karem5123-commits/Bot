@@ -9,6 +9,7 @@ const mongoose = require('mongoose');
 const CONFIG = {
     CLIENT_ID: "1479871879496994943",
     MAIN_GUILD: "1491541282156449794",
+    REVIEW_GUILD: "1488868987805892730",
     REVIEW_CHAN: "1489069664414859326",
     OWNERS: ["1347959266539081768", "1407316453060907069"],
     RANKS: {
@@ -21,13 +22,12 @@ const CONFIG = {
     }
 };
 
-// --- 📊 SCHEMA ---
+// --- 📊 DATABASE SCHEMA ---
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: { type: String, required: true, unique: true },
     username: String,
     rank: { type: String, default: "None" },
     elo: { type: Number, default: 0 },
-    strikes: { type: Number, default: 0 },
     lastSubmit: { type: Number, default: 0 },
     reviewCount: { type: Number, default: 0 }
 }));
@@ -40,7 +40,7 @@ const purge = (msg, time = 10000) => {
     setTimeout(() => msg.delete().catch(() => {}), time);
 };
 
-// --- 🚀 SLASH COMMANDS ---
+// --- 🛠️ SLASH COMMAND DEFINITIONS ---
 const commands = [
     { name: 'submit', description: 'Initialize your edit uplink' },
     { name: 'profile', description: 'Access your operative dossier' },
@@ -49,7 +49,6 @@ const commands = [
 
 // --- ⚡ INTERACTION HANDLER ---
 client.on('interactionCreate', async (i) => {
-    // 1. SLASH COMMANDS
     if (i.isChatInputCommand()) {
         const u = await User.findOne({ discordId: i.user.id }) || await User.create({ discordId: i.user.id, username: i.user.username });
 
@@ -74,7 +73,6 @@ client.on('interactionCreate', async (i) => {
         }
     }
 
-    // 2. MODAL UPLINK
     if (i.isButton() && i.customId === 'open_modal') {
         const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('SUBMIT EDIT');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel("URL").setStyle(TextInputStyle.Short).setRequired(true)));
@@ -89,12 +87,11 @@ client.on('interactionCreate', async (i) => {
             content: `📥 **NEW SUBMISSION:** <@${i.user.id}>\n${i.fields.getTextInputValue('url')}`, 
             components: [new ActionRowBuilder().addComponents(btns.slice(0, 3)), new ActionRowBuilder().addComponents(btns.slice(3))] 
         });
-        await msg.startThread({ name: `Feedback: ${i.user.username}` }); // Auto-Thread
+        await msg.startThread({ name: `Feedback: ${i.user.username}` }); 
         await User.findOneAndUpdate({ discordId: i.user.id }, { lastSubmit: Date.now() });
         return i.reply({ content: "✅ **SENT**", ephemeral: true });
     }
 
-    // 3. THE 20x RANKING SYSTEM (ELO SCALING & PROMOTION LOGIC)
     if (i.isButton() && i.customId.startsWith('rank_')) {
         const [_, type, uid] = i.customId.split('_');
         const mainGuild = client.guilds.cache.get(CONFIG.MAIN_GUILD);
@@ -106,43 +103,45 @@ client.on('interactionCreate', async (i) => {
         const oldIdx = rankOrder.indexOf(targetUser.rank);
         const newIdx = rankOrder.indexOf(type);
 
-        // 20x Logic: Dynamic Bonus Calculation
         let eloChange = CONFIG.RANKS[type].elo;
-        if (newIdx > oldIdx) eloChange = Math.floor(eloChange * 1.5); // 50% Promotion Bonus
-        if (newIdx < oldIdx) eloChange = -Math.abs(eloChange); // Demotion Penalty
-        if (targetUser.elo > 1000) eloChange = Math.floor(eloChange * 0.5); // Decay/Hard-cap scaling
+        if (newIdx > oldIdx) eloChange = Math.floor(eloChange * 1.5); 
+        if (newIdx < oldIdx) eloChange = -Math.abs(eloChange); 
+        if (targetUser.elo > 1000) eloChange = Math.floor(eloChange * 0.5); 
 
         await User.findOneAndUpdate({ discordId: uid }, { rank: type, $inc: { elo: eloChange } });
         
-        // Sync Roles
         const role = mainGuild.roles.cache.get(CONFIG.RANKS[type].id);
         if (role) {
             await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
             await member.roles.add(role);
         }
 
-        await User.findOneAndUpdate({ discordId: i.user.id }, { $inc: { reviewCount: 1 } }, { upsert: true }); // Staff Tracking
+        await User.findOneAndUpdate({ discordId: i.user.id }, { $inc: { reviewCount: 1 } }, { upsert: true }); 
         return i.update({ content: `✅ **RANKED:** <@${uid}> → **${type}** (\`${eloChange > 0 ? '+' : ''}${eloChange} ELO\`)`, components: [] });
     }
 });
 
-// --- 🛰️ BOOT SYSTEM ---
+// --- 🛰️ INSTANT SYNC BOOT SYSTEM ---
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    console.log(`\u001b[1;31m[!] BYPASSING FIREWALL...\n\u001b[1;33m[!] INITIATING NEURAL OVERLOAD...\u001b[1;35m\n    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n    ██████╔╝███████╗██████╔╝██║      ██████╔╝╚████╔╝ \n    ██████╔╝███████╗██████╔╝███████╗╚██████╔╝   ██║   \n\u001b[0m`);
+    console.log(`\u001b[1;31m[!] BYPASSING FIREWALL...\n\u001b[1;33m[!] INITIATING NEURAL OVERLOAD...\n\u001b[1;35m\n    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n    ██████╔╝███████╗██████╔╝██║      ██████╔╝╚████╔╝ \n    ██████╔╝███████╗██████╔╝███████╗╚██████╔╝   ██║   \n\u001b[0m`);
     
-    for (const s of ["MONGO", "GATEWAY", "SLASH_SYNC"]) {
-        process.stdout.write(` [#] ${s.padEnd(12)} : `); await sleep(300);
-        process.stdout.write(`\u001b[1;32m[ STABLE ]\n\u001b[0m`);
-    }
-
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
+
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-        await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: commands });
-        console.log(`\n\u001b[1;35m[!] SINGULARITY ONLINE\u001b[0m\n`);
+        
+        // INSTANT GUILD SYNC (Forces update to your specific servers immediately)
+        const guilds = [CONFIG.MAIN_GUILD, CONFIG.REVIEW_GUILD];
+        for (const gId of guilds) {
+            process.stdout.write(` [#] SYNCING GUILD ${gId.slice(-4)} : `);
+            await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, gId), { body: commands });
+            process.stdout.write(`\u001b[1;32m[ INSTANT ]\n\u001b[0m`);
+        }
+
+        console.log(`\n\u001b[1;35m[!] SINGULARITY ONLINE : SLASH COMMANDS SYNCED\u001b[0m\n`);
     } catch (e) { console.error(e); }
 }
 boot();
