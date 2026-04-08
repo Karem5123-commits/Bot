@@ -1,6 +1,6 @@
 /**
  * TERMINAL V6: ARCHITECT HYPER-DRIVE
- * Integrated with Real-Time Command Hot-Reloading
+ * Final Build: Hot-Reload + Interaction Handlers
  */
 
 require('dotenv').config();
@@ -54,7 +54,7 @@ const State = {
     feed: [],
     cmdCache: new Map(),
     io: null,
-    SETTINGS: SETTINGS, // Linked for command.js access
+    SETTINGS: SETTINGS,
     log(type, msg) {
         const entry = { type, msg, time: Date.now() };
         this.feed.unshift(entry);
@@ -137,14 +137,11 @@ app.post('/api/admin/toggle', async (req, res) => {
 });
 
 // ==========================================
-// [06] MESSAGE LISTENER (HOT-RELOAD ENABLED)
+// [06] MESSAGE LISTENER (HOT-RELOAD)
 // ==========================================
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.content.startsWith('!')) return;
 
-    // --- HOT-RELOAD LOGIC ---
-    // Clears the cache and re-imports the commands file on every message
-    // This allows real-time edits without restarting the bot.
     try {
         delete require.cache[require.resolve('./commands.js')];
         Commands = require('./commands.js');
@@ -152,20 +149,32 @@ client.on('messageCreate', async (m) => {
         return console.error("Failed to hot-reload commands.js:", e);
     }
 
-    // Execute the command through the Tiered System
     await Commands.handle(m, client, State, RenderEngine, User);
 });
 
 // ==========================================
-// [07] THE HYPER-DRIVE BOOT SYSTEM
+// [07] INTERACTION LISTENER (FIXED)
+// ==========================================
+client.on('interactionCreate', async (i) => {
+    if (!i.isButton()) return;
+
+    if (i.customId === 'submit_content') {
+        // Ack the interaction immediately to stop "Interaction Failed"
+        await i.reply({ 
+            content: "📂 **PORTAL_OPEN:** Upload your media or provide a link below. Staff will be notified.", 
+            ephemeral: true 
+        });
+        State.log("PORTAL", `${i.user.username} accessed Submission Portal.`);
+    }
+});
+
+// ==========================================
+// [08] THE HYPER-DRIVE BOOT SYSTEM
 // ==========================================
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     
-    const totalRAM = (os.totalmem() / 1024 / 1024 / 1024).toFixed(1);
-    const cpuModel = os.cpus()[0].model.split('@')[0].trim();
-
     console.log(`
     ██████╗ ███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
     ██╔══██╗██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗██║     
@@ -173,23 +182,6 @@ async function boot() {
     ██╔══██╗██╔══╝  ██╔══██╗██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║     
     ██████╔╝███████╗██║  ██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗
     ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝`.cyan.bold);
-
-    console.log(`\n ${" SYSTEM DIAGNOSTIC ".bgCyan.black.bold} `);
-    console.log(` 🛰️  HOST: ${os.hostname().yellow} | 🧠  CORE: ${cpuModel.dim} | 📟  MEM: ${totalRAM}GB`);
-    console.log("-".repeat(65).dim);
-
-    const check = (n, c) => {
-        process.stdout.write(` > CHECKING ${n.padEnd(20)} `);
-        const res = c();
-        console.log(` [ ${res ? "PASSED".green.bold : "FAILED".red.bold} ]`);
-        return res;
-    };
-
-    if (!check("ENVIRONMENT_VARS", () => process.env.DISCORD_TOKEN && process.env.MONGO_URI)) process.exit(1);
-    check("FFMPEG_BINARY", () => { try { execSync('ffmpeg -version', { stdio: 'ignore' }); return true; } catch(e) { return false; } });
-
-    console.log("-".repeat(65).dim);
-    console.log(`\n ${" INITIALIZING NEURAL LINK ".bgMagenta.white.bold} `);
 
     const tasks = [
         { id: "DB_SYNC", op: () => mongoose.connect(process.env.MONGO_URI) },
@@ -212,11 +204,6 @@ async function boot() {
             process.exit(1);
         }
     }
-
-    console.log("\n" + "=".repeat(65).cyan);
-    console.log(` ${" SYSTEM STATUS: OPTIMAL ".bgGreen.black.bold} `);
-    console.log(` 👤 IDENTITY: ${client.user.tag.cyan} | 🌐 PORT: ${SETTINGS.PORT}`);
-    console.log("=".repeat(65).cyan + "\n");
     
     State.log("SYSTEM", "Architect V6 Sync-Engine Online.");
 }
