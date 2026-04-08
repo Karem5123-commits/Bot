@@ -1,12 +1,13 @@
 /**
- * TERMINAL V6: ARCHITECT HYPER-DRIVE [EXTREME UPGRADE]
+ * TERMINAL V6: ARCHITECT HYPER-DRIVE [MAX_OUTPUT]
+ * Status: STABLE | Logic: UNIFIED | UI: CYBERPUNK
  */
 
 require('dotenv').config();
 const { 
     Client, GatewayIntentBits, Partials, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, PermissionFlagsBits,
-    ModalBuilder, TextInputBuilder, TextInputStyle, EmbedBuilder 
+    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
+    TextInputStyle, EmbedBuilder 
 } = require('discord.js');
 const mongoose = require('mongoose');
 const express = require('express');
@@ -19,12 +20,14 @@ const colors = require('colors');
 
 let Commands = require('./commands.js');
 
+// [01] CONFIGURATION
 const SETTINGS = {
     OWNERS: ["1399094217846030346", "1347959266539081768"],
     ADMIN_PASS: "angieloveschicken",
     PORT: process.env.PORT || 3000
 };
 
+// [02] DATABASE MODELS
 const User = mongoose.model('User', new mongoose.Schema({
     discordId: { type: String, index: true, unique: true },
     username: String,
@@ -38,6 +41,7 @@ const GlobalSettings = mongoose.model('Settings', new mongoose.Schema({
     toggles: { type: Map, of: Boolean, default: {} }
 }));
 
+// [03] STATE & TELEMETRY
 const State = {
     feed: [],
     cmdCache: new Map(),
@@ -52,6 +56,7 @@ const State = {
     }
 };
 
+// [04] MAX-OUTPUT RENDER ENGINE
 const RenderEngine = {
     queue: [],
     busy: false,
@@ -65,30 +70,30 @@ const RenderEngine = {
         const job = this.queue.shift();
         const out = path.join(__dirname, `temp_${job.message.id}.mp4`);
 
-        // UPGRADED: Dynamic Render Status
-        const renderEmbed = new EmbedBuilder()
-            .setColor(0xFFA500)
-            .setTitle('⚙️ RENDERING_IN_PROGRESS')
-            .setDescription('`[▓▓▓▓░░░░░░░░░░░] 25%` - **UPSSCALE_INIT**')
-            .setFooter({ text: `Target: 4K 2160p | libx264` });
+        const progressEmbed = new EmbedBuilder()
+            .setColor(0x00FFFF)
+            .setTitle('💠 RENDERING_V6_ACTIVE')
+            .setDescription('`[▓▓▓▓▓▓░░░░░░░░░] 45%` - **ALLOCATING_4K_CORES**')
+            .setFooter({ text: 'High-Priority Processing...' });
 
-        await job.statusMsg.edit({ content: '', embeds: [renderEmbed] });
+        await job.statusMsg.edit({ content: '', embeds: [progressEmbed] }).catch(() => {});
 
         ffmpeg(job.url)
             .outputOptions(["-vf scale=3840:2160", "-c:v libx264", "-crf 18", "-preset superfast"])
             .on('end', async () => {
-                const successEmbed = new EmbedBuilder()
-                    .setColor(0x00FF00)
-                    .setTitle('🟢 RENDER_STABLE')
-                    .setDescription('File has been dispatched to your DMs.');
-                
-                await job.message.author.send({ content: "📦 **YOUR_4K_RECON_DATA**", files: [out] }).catch(() => {});
-                await job.statusMsg.edit({ embeds: [successEmbed] });
-                
+                const finishEmbed = new EmbedBuilder().setColor(0x00FF00).setTitle('🟢 RENDER_SUCCESS').setDescription('Data delivered to Secure DMs.');
+                await job.message.author.send({ content: "📦 **ARCHITECT_EXPORT_COMPLETE**", files: [out] }).catch(() => {});
+                await job.statusMsg.edit({ embeds: [finishEmbed] }).catch(() => {});
                 if (fs.existsSync(out)) fs.unlinkSync(out);
                 this.busy = false;
                 this.process();
-            }).save(out);
+            })
+            .on('error', (e) => {
+                State.log("ERROR", `Render Failed: ${e.message}`);
+                this.busy = false;
+                this.process();
+            })
+            .save(out);
     }
 };
 
@@ -97,52 +102,53 @@ const app = express();
 const server = http.createServer(app);
 State.io = new Server(server);
 
+// [06] HOT-RELOAD MESSAGE LISTENER
 client.on('messageCreate', async (m) => {
     if (m.author.bot || !m.content.startsWith('!')) return;
     try {
         delete require.cache[require.resolve('./commands.js')];
         Commands = require('./commands.js');
-    } catch (e) { return console.error(e); }
-    await Commands.handle(m, client, State, RenderEngine, User);
+        await Commands.handle(m, client, State, RenderEngine, User);
+    } catch (e) { State.log("CMD_ERR", e.message); }
 });
 
-// UPGRADED: Ultra-Submission Interaction
+// [07] ULTIMATE INTERACTION LISTENER
 client.on('interactionCreate', async (i) => {
     if (i.isButton() && i.customId === 'submit_content') {
-        const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('🚀 SECURE_UPLOADER_V6');
-        const linkInput = new TextInputBuilder()
-            .setCustomId('link').setLabel("REPLAY / CONTENT LINK").setStyle(TextInputStyle.Short).setRequired(true);
-        const descInput = new TextInputBuilder()
-            .setCustomId('desc').setLabel("INTEL / NOTES").setStyle(TextInputStyle.Paragraph).setRequired(false);
-        
+        const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('🚀 ARCHITECT_UPLOADER');
+        const linkInput = new TextInputBuilder().setCustomId('link').setLabel("REPLAY/VIDEO LINK").setStyle(TextInputStyle.Short).setRequired(true);
+        const descInput = new TextInputBuilder().setCustomId('desc').setLabel("INTEL/NOTES").setStyle(TextInputStyle.Paragraph).setRequired(false);
         modal.addComponents(new ActionRowBuilder().addComponents(linkInput), new ActionRowBuilder().addComponents(descInput));
         await i.showModal(modal);
     }
 
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
         const link = i.fields.getTextInputValue('link');
-        const desc = i.fields.getTextInputValue('desc') || "No notes.";
+        const desc = i.fields.getTextInputValue('desc') || "No Intel Provided.";
         
-        const embed = new EmbedBuilder()
+        const card = new EmbedBuilder()
             .setColor(0x00FFFF)
             .setAuthor({ name: i.user.username, iconURL: i.user.displayAvatarURL() })
-            .setTitle('📥 NEW_RECON_RECEIVED')
+            .setTitle('📥 INBOUND_DATA_STREAM')
             .addFields(
-                { name: '🔗 TARGET_LINK', value: `[Click to View](${link})` },
+                { name: '🔗 TARGET_URL', value: link },
                 { name: '📝 INTEL', value: `\`\`\`${desc}\`\`\`` },
-                { name: '📊 STATUS', value: '`PENDING_VERIFICATION`', inline: true }
+                { name: '📊 STATUS', value: '`VERIFYING_RECON`', inline: true }
             )
-            .setFooter({ text: `ARCHITECT_NETWORK | ID: ${i.user.id}` })
-            .setTimestamp();
+            .setFooter({ text: `SRC_ID: ${i.user.id}` }).setTimestamp();
 
-        await i.channel.send({ embeds: [embed] });
-        const res = await i.reply({ content: `📡 **DATA_SYNC_SUCCESSFUL**`, fetchReply: true });
-        setTimeout(() => res.delete().catch(() => {}), 10000);
+        // Fix: Explicitly send to the channel and log it
+        await i.channel.send({ embeds: [card] });
+        const ack = await i.reply({ content: `📡 **DATA_STREAM_SYNCED**`, fetchReply: true });
+        setTimeout(() => ack.delete().catch(() => {}), 15000);
+        State.log("SUBMIT", `${i.user.username} synced link.`);
     }
 });
 
+// [08] THE ICONIC HYPER-DRIVE BOOT
 async function boot() {
     console.clear();
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     console.log(`
     ██████╗ ███████╗██████╗ ███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
     ██╔══██╗██╔════╝██╔══██╗████╗ ████║██║████╗  ██║██╔══██╗██║     
@@ -152,20 +158,20 @@ async function boot() {
     ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝`.cyan.bold);
 
     const tasks = [
-        { id: "DB_CLUSTER", op: () => mongoose.connect(process.env.MONGO_URI) },
+        { id: "DB_SYNC", op: () => mongoose.connect(process.env.MONGO_URI) },
         { id: "API_GATEWAY", op: () => server.listen(SETTINGS.PORT) },
         { id: "SYNC_CACHE", op: async () => {
             const s = await GlobalSettings.findOne() || await GlobalSettings.create({});
             State.cmdCache = s.toggles;
         }},
-        { id: "DISCORD_LINK", op: () => client.login(process.env.DISCORD_TOKEN) }
+        { id: "D_JS_LINK", op: () => client.login(process.env.DISCORD_TOKEN) }
     ];
 
     for (const task of tasks) {
-        process.stdout.write(` ⚙️  INITIALIZING ${task.id.padEnd(12)}... `);
-        try { await task.op(); process.stdout.write(`${"ONLINE".green.bold}\n`); await new Promise(r => setTimeout(r, 150)); } 
+        process.stdout.write(` ⚙️  ESTABLISHING ${task.id.padEnd(12)}... `);
+        try { await task.op(); process.stdout.write(`${"STABLE".green.bold}\n`); await sleep(150); } 
         catch (e) { process.stdout.write(`${"FAILED".red.bold}\n`); process.exit(1); }
     }
-    State.log("SYSTEM", "Architect V6 Core: Fully Stabilized.");
+    State.log("SYSTEM", "Architect Core V6.0.0 Online.");
 }
 boot();
