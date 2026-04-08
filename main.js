@@ -1,180 +1,99 @@
-require('dotenv').config();
-const { 
-    Client, GatewayIntentBits, Partials, ActionRowBuilder, 
-    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
-    TextInputStyle, EmbedBuilder, PermissionsBitField 
-} = require('discord.js');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const mongoose = require('mongoose');
-const ffmpeg = require('fluent-ffmpeg');
-const fs = require('fs');
-const colors = require('colors');
+import discord
+import os
+import asyncio
+from discord.ext import commands
 
-// --- ⚙️ MASTER CONFIG ---
-const CONFIG = {
-    MAIN_GUILD: process.env.GUILD_ID,
-    REVIEW_CHAN: process.env.REVIEW_CHANNEL_ID,
-    LOG_CHAN: process.env.LOG_CHANNEL_ID,
-    OWNERS: process.env.OWNER_IDS?.split(',') || [],
-    ADMIN_PASS: process.env.ADMIN_KEY,
-    RANKS: {
-        "SSS": { id: "1488208025859788860", elo: 100 },
-        "SS+": { id: "1488208185633280041", elo: 75 },
-        "SS":  { id: "1488208281930432602", elo: 50 },
-        "S+":  { id: "1488208494170738793", elo: 40 },
-        "S":   { id: "1488208584142753863", elo: 25 },
-        "A":   { id: "1488208696759685190", elo: 10 }
-    }
-};
+intents = discord.Intents.default()
+intents.guilds = True
+intents.members = True  # Needed for auto-role assignment
+intents.message_content = True
 
-const User = mongoose.model('User', new mongoose.Schema({
-    discordId: String,
-    username: String,
-    rank: { type: String, default: "None" },
-    xp: { type: Number, default: 0 },
-    elo: { type: Number, default: 0 },
-    isShadowBanned: { type: Boolean, default: false },
-    premiumCode: { type: String, default: null },
-    lastCommand: { type: Date, default: 0 }
-}));
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-const client = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent, 
-        GatewayIntentBits.GuildMembers
-    ], 
-    partials: [Partials.Channel, Partials.GuildMember] 
-});
+@bot.event
+async def on_ready():
+    print(f'🚀 {bot.user.name} is online and ready to build.')
 
-// --- 🚀 MESSAGE COMMANDS (GLOBAL ACCESS FIXED) ---
-client.on("messageCreate", async (m) => {
-    if (m.author.bot || !m.guild) return;
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def build(ctx):
+    """The Ultimate Server Build Command"""
+    guild = ctx.guild
     
-    let u = await User.findOneAndUpdate(
-        { discordId: m.author.id }, 
-        { username: m.author.username }, 
-        { upsert: true, new: true }
-    );
+    # 1. CLEANUP (Optional: Deletes old channels/roles to start fresh)
+    await ctx.send("🧹 Cleaning up existing layout...")
+    for channel in guild.channels:
+        try: await channel.delete()
+        except: pass
 
-    if (u.isShadowBanned || !m.content.startsWith('!')) return;
-
-    const args = m.content.slice(1).trim().split(/ +/g);
-    const cmd = args.shift().toLowerCase();
-
-    // !submit - FORCED PUBLIC VISIBILITY
-    if (cmd === 'submit') {
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('open_modal')
-                .setLabel('OPEN SUBMISSION PANEL')
-                .setStyle(ButtonStyle.Primary)
-                .setEmoji('📥')
-        );
-
-        // Sending to channel instead of reply to bypass certain visibility restrictions
-        return m.channel.send({ 
-            content: `### ⚡ OPERATIVE_UPLINK\n<@${m.author.id}>, initialize your submission dossier below.`, 
-            components: [row] 
-        });
-    }
-
-    // !code - Re-added for global use
-    if (cmd === 'code') {
-        if (args[0] === CONFIG.ADMIN_PASS) {
-            await User.updateOne({ discordId: m.author.id }, { $set: { premiumCode: args[0] } });
-            return m.reply("💎 **PREMIUM_ACCESS_GRANTED**");
-        }
-        return m.reply("❌ **INVALID_KEY**");
-    }
-
-    if (cmd === 'profile') {
-        return m.reply(`👤 **${u.username}** | Rank: \`${u.rank}\` | ELO: \`${u.elo}\``);
-    }
-});
-
-// --- ⚡ INTERACTION HANDLER (MODALS & RANKING) ---
-client.on('interactionCreate', async (i) => {
-    // Open Modal
-    if (i.isButton() && i.customId === 'open_modal') {
-        const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('SUBMIT EDIT');
-        const linkInput = new TextInputBuilder()
-            .setCustomId('url')
-            .setLabel("STREAMABLE LINK")
-            .setStyle(TextInputStyle.Short)
-            .setRequired(true);
-        modal.addComponents(new ActionRowBuilder().addComponents(linkInput));
-        return i.showModal(modal);
-    }
-
-    // Modal Submission
-    if (i.isModalSubmit() && i.customId === 'sub_modal') {
-        const link = i.fields.getTextInputValue('url');
-        const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
-        
-        const btns = Object.keys(CONFIG.RANKS).map(r => 
-            new ButtonBuilder().setCustomId(`sel_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary)
-        );
-
-        await rChan.send({ 
-            content: `📥 **NEW_SUBMISSION:** <@${i.user.id}>\n**URL:** ${link}`, 
-            components: [
-                new ActionRowBuilder().addComponents(btns.slice(0, 3)), 
-                new ActionRowBuilder().addComponents(btns.slice(3))
-            ] 
-        });
-        return i.reply({ content: "✅ **UPLINK_SENT**", ephemeral: true });
-    }
-
-    // Ranking Buttons (Staff Only)
-    if (i.isButton() && i.customId.startsWith('sel_')) {
-        if (!i.member.permissions.has(PermissionsBitField.Flags.ManageRoles) && !CONFIG.OWNERS.includes(i.user.id)) {
-            return i.reply({ content: "🚫 **ACCESS_DENIED**", ephemeral: true });
-        }
-
-        const [_, rank, uid] = i.customId.split('_');
-        const rankData = CONFIG.RANKS[rank];
-        const member = await i.guild.members.fetch(uid).catch(() => null);
-
-        await User.findOneAndUpdate({ discordId: uid }, { rank: rank, $inc: { elo: rankData.elo } });
-        if (member) {
-            await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
-            await member.roles.add(rankData.id);
-        }
-        return i.update({ content: `✅ **RANKED:** <@${uid}> to **${rank}**`, components: [] });
-    }
-});
-
-// --- 🛰️ CRAZY BOOT SYSTEM (HYPER-DRIVE) ---
-async function boot() {
-    console.clear();
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    # 2. CREATE ROLES (With proper hierarchy and colors)
+    await ctx.send("🎭 Creating professional role hierarchy...")
     
-    console.log(`
-    \u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...
-    \u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...
-    \u001b[1;35m
-    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
-    ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
-    ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ 
-    ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  
-    ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   
-    ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
-    \u001b[0m`.bold);
+    # Staff Roles
+    admin_role = await guild.create_role(name="OWNER", colour=discord.Colour.from_rgb(255, 0, 0), hoist=True, permissions=discord.Permissions(administrator=True))
+    mod_role = await guild.create_role(name="STAFF", colour=discord.Colour.blue(), hoist=True)
+    
+    # Tier Roles (Visual Only - No Perms)
+    tier_data = [
+        ("SSS", discord.Colour.from_rgb(255, 215, 0)),
+        ("WORLD CLASS", discord.Colour.from_rgb(255, 100, 255)),
+        ("LEGENDARY", discord.Colour.from_rgb(150, 0, 255)),
+        ("EPIC", discord.Colour.from_rgb(0, 200, 255)),
+        ("RARE", discord.Colour.from_rgb(50, 255, 50)),
+        ("COMMON", discord.Colour.light_grey())
+    ]
+    
+    roles = {}
+    for name, color in tier_data:
+        role = await guild.create_role(name=name, colour=color, hoist=True)
+        roles[name] = role
 
-    const stages = ["NEURAL_SYNC", "R2_UPLINK", "MONGO_ATLAS", "DISCORD_GATEWAY", "FFMPEG_4K"];
-    for (const stage of stages) {
-        process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(15)} : `);
-        await sleep(400);
-        process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
+    # 3. PERMISSION OVERWRITES
+    # Setup standard 'Read Only' for info channels
+    readonly = {
+        guild.default_role: discord.PermissionOverwrite(send_messages=False, view_channel=True),
+        admin_role: discord.PermissionOverwrite(send_messages=True, view_channel=True)
     }
 
-    try {
-        await mongoose.connect(process.env.MONGO_URI);
-        await client.login(process.env.DISCORD_TOKEN);
-        console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE : GLOBAL ACCESS STABILIZED\u001b[0m\n`);
-    } catch (e) { console.log(e); }
-}
+    # 4. DESIGNING CATEGORIES & CHANNELS
+    # --- INFORMATION ---
+    cat_info = await guild.create_category("『 ɪɴꜰᴏʀᴍᴀᴛɪᴏɴ 』", overwrites=readonly)
+    await guild.create_text_channel("┃rules", category=cat_info)
+    await guild.create_text_channel("┃announcements", category=cat_info)
+    await guild.create_text_channel("┃roles", category=cat_info)
 
-boot();
+    # --- CHAT PLAZA ---
+    cat_chat = await guild.create_category("『 ᴄᴏᴍᴍᴜɴɪᴛʏ 』")
+    await guild.create_text_channel("┃general-chat", category=cat_chat)
+    await guild.create_text_channel("┃media-only", category=cat_chat)
+    await guild.create_text_channel("┃bot-commands", category=cat_chat)
+
+    # --- TIER ZONE (SSS Only) ---
+    sss_only = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        roles["SSS"]: discord.PermissionOverwrite(view_channel=True),
+        admin_role: discord.PermissionOverwrite(view_channel=True)
+    }
+    cat_sss = await guild.create_category("『 ꜱꜱꜱ ᴇxᴄʟᴜꜱɪᴠᴇ 』", overwrites=sss_only)
+    await guild.create_text_channel("┃sss-lounge", category=cat_sss)
+    await guild.create_voice_channel("┃SSS VC", category=cat_sss)
+
+    # --- VOICE LOUNGE ---
+    cat_vc = await guild.create_category("『 ᴠᴏɪᴄᴇ ᴄʜᴀɴɴᴇʟꜱ 』")
+    await guild.create_voice_channel("┃Lounge", category=cat_vc)
+    await guild.create_voice_channel("┃Gaming", category=cat_vc)
+
+    # 5. AUTO-WELCOME SYSTEM
+    welcome_channel = await guild.create_text_channel("┃welcome", category=cat_info)
+    
+    await ctx.author.send(f"✅ **{guild.name}** has been fully optimized and styled!")
+
+# AUTO-ROLE ON JOIN
+@bot.event
+async def on_member_join(member):
+    # Automatically give 'COMMON' role to new joins
+    role = discord.utils.get(member.guild.roles, name="COMMON")
+    if role:
+        await member.add_roles(role)
+
+bot.run(os.environ.get('DISCORD_TOKEN'))
