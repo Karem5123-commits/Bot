@@ -1,45 +1,7 @@
-require('dotenv').config(); require('colors');
-const { Client, ActionRowBuilder, ButtonBuilder, ModalBuilder, TextInputBuilder, REST, Routes } = require('discord.js');
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3"), { nanoid } = require('nanoid'), mongoose = require('mongoose');
-const { spawn } = require('child_process'), { PassThrough } = require('stream'), { pipeline } = require('stream/promises'), axios = require('axios'), fs = require('fs');
-const Kernel = require('./commands.js'), jobs = new Set(), queue = new (require('p-queue').default)({ concurrency: 2 });
-const s3 = new S3Client({ region: "auto", endpoint: process.env.R2_ENDPOINT, credentials: { accessKeyId: process.env.R2_ACCESS_KEY, secretAccessKey: process.env.R2_SECRET_KEY } });
-const client = new Client({ intents: 32767 }), User = mongoose.model('U', { id: String, r: String, e: Number }), Q = mongoose.model('Q', { c: String, u: Boolean });
-
-const v = async (u) => {
-    const res = await axios({ url: u, responseType: 'stream', timeout: 15e3 }), t = `./${nanoid(5)}`, w = fs.createWriteStream(t);
-    let b = 0; for await (const c of res.data) { w.write(c); if ((b += c.length) > 2e6) break; } w.end();
-    const d = await new Promise(r => { let o = ''; const f = spawn('ffprobe', ['-v', '0', '-show_entries', 'format=duration', '-of', 'csv=p=0', t]); f.stdout.on('data', x => o += x); f.on('close', () => r(parseFloat(o) || 0)); });
-    fs.unlink(t, () => {}); if (!d || d > 60) throw 0; return res;
-};
-
-const hQ = async (i) => {
-    const c = i.fields.getTextInputValue('c').toUpperCase(), u = i.fields.getTextInputValue('u').trim();
-    if (jobs.has(u)) return i.reply({ content: '⏳', ephemeral: 1 }); await i.deferReply({ ephemeral: 1 });
-    const q = await Q.findOne({ c, u: false }); if (!q) return i.editReply('❌');
-    jobs.add(u); queue.add(async () => {
-        let ff; try {
-            const res = await v(u); ff = spawn('ffmpeg', ['-i', 'pipe:0', '-vf', 'hqdn3d=1.5:1.5:6:6,unsharp=3:3:0.5:3:3:0.0,scale=1280:-2', '-c:v', 'libx264', '-crf', '20', '-f', 'mp4', 'pipe:1']);
-            const pt = new PassThrough({ highWaterMark: 1e6 }); let r = 0;
-            res.data.on('data', x => { if ((r += x.length) > 5e7) { res.data.destroy(); ff?.kill(); } });
-            const k = `f_${nanoid(7)}.mp4`, up = s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: k, Body: pt, ContentType: 'video/mp4' }));
-            await Promise.all([pipeline(res.data, ff.stdin), pipeline(ff.stdout, pt), up]);
-            await i.editReply(`✅ ${process.env.BASE_URL}/${k}`); await Q.updateOne({ _id: q._id }, { u: true });
-        } catch { ff?.kill(); await i.editReply('❌'); } finally { jobs.delete(u); }
-    });
-};
-
-client.on('interactionCreate', async i => {
-    if (i.isChatInputCommand()) {
-        if (i.commandName === 'quality') return i.showModal(new ModalBuilder().setCustomId('qm').setTitle('💠').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c').setLabel('K').setStyle(1)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('u').setLabel('U').setStyle(1))));
-        if (i.commandName === 'profile') { const u = await User.findOne({ id: i.user.id }); return i.reply({ content: `📊 ${u?.e || 0} | ${u?.r || '—'}`, ephemeral: 1 }); }
-        return Kernel.handle(i);
-    }
-    if (i.isModalSubmit() && i.customId === 'qm') return hQ(i);
-});
-
-(async () => {
-    await mongoose.connect(process.env.MONGO_URI);
-    await new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN).put(Routes.applicationGuildCommands(process.env.CLIENT_ID, "1488868987805892730"), { body: Kernel.definitions });
-    await client.login(process.env.DISCORD_TOKEN); console.log('🟢'.green);
-})();
+require('dotenv').config();const{Client,ActionRowBuilder,ButtonBuilder,ModalBuilder,TextInputBuilder,REST,Routes}=require('discord.js'),m=require('mongoose'),{spawn:s}=require('child_process'),a=require('axios'),K=require('./commands.js'),app=require('express')(),c=new Client({intents:32767});
+let sys={on:1,lock:0,jobs:0,logs:[]},log=m=>{sys.logs.push(`[${new Date().toLocaleTimeString()}] ${m}`);if(sys.logs.length>15)sys.logs.shift()};
+const v=async u=>{const r=await a({url:u,responseType:'stream',timeout:15e3}),t=`./${require('nanoid').nanoid(5)}`,w=require('fs').createWriteStream(t);for await(const x of r.data){w.write(x);if(w.bytesWritten>2e6)break}w.end();return new Promise(z=>{const g=s('ffprobe',['-v','0','-show_entries','format=duration','-of','csv=p=0',t]);let o='';g.stdout.on('data',k=>o+=k);g.on('close',()=>{require('fs').unlink(t,()=>{});z(parseFloat(o)>0&&parseFloat(o)<=60?r:null)})})};
+app.use(require('express').json());app.get('/api/s',(req,res)=>res.json(sys));app.post('/api/c',(req,res)=>{const{a}=req.body;if(a=='p')sys.on=!sys.on;if(a=='l')sys.lock=!sys.lock;log(`Action: ${a}`);res.json(sys)});
+app.get('/',(req,res)=>res.send(`<html><body style="background:#000;color:#0f0;font-family:monospace;padding:20px"><h2>☢️ OMNI-DASH</h2><p>POWER: ${sys.on?'ON':'OFF'} | LOCK: ${sys.lock?'ON':'OFF'}</p><button onclick="f('p')">POWER</button><button onclick="f('l')">LOCK</button><div id="l" style="margin-top:20px;border-top:1px solid #333"></div><script>const f=a=>fetch('/api/c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({a})});setInterval(async()=>{const r=await fetch('/api/s'),d=await r.json();document.getElementById('l').innerHTML=d.logs.reverse().join('<br>')},2000)</script></body></html>`));
+c.on('interactionCreate',async i=>{if(!sys.on)return;if(sys.lock&&!i.member.permissions.has('8n'))return i.reply({content:'🔒',ephemeral:1});if(i.isChatInputCommand()){log(`Cmd: ${i.commandName}`);if(i.commandName==='quality')return i.showModal(new ModalBuilder().setCustomId('q').setTitle('💠').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c').setLabel('K').setStyle(1)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('u').setLabel('U').setStyle(1))));return K.handle(i)}if(i.isModalSubmit()&&i.customId==='q')return K.handle(i)});
+(async()=>{try{await m.connect(process.env.MONGO_URI);const d=K.definitions.map(x=>({...x,description:x.description||'System Command'}));await new REST({version:'10'}).setToken(process.env.DISCORD_TOKEN).put(Routes.applicationGuildCommands(process.env.CLIENT_ID,"1488868987805892730"),{body:d});await c.login(process.env.DISCORD_TOKEN);app.listen(process.env.PORT||3000);console.log('☢️')}catch(e){console.error(e)}})();
