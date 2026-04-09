@@ -1,7 +1,7 @@
 {
-  "name": "omni-singularity-toxin",
-  "version": "23.6.1",
-  "description": "Lethal Hybrid Nano-Kernel with Dashboard",
+  "name": "voidless-singularity",
+  "version": "3.0.0",
+  "description": "Multi-Core AI Media Singularity Kernel",
   "main": "main.js",
   "engines": {
     "node": "22.x"
