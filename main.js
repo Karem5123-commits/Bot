@@ -29,33 +29,25 @@ const CONFIG = {
     }
 };
 
-// --- 📊 DATABASE SCHEMAS ---
-const userSchema = new mongoose.Schema({
+// --- 📊 DATABASE ---
+const User = mongoose.model('User', new mongoose.Schema({
     discordId: { type: String, required: true, unique: true },
     username: String,
     rank: { type: String, default: "None" },
     elo: { type: Number, default: 0 },
     lastSubmit: { type: Number, default: 0 }
-});
-const User = mongoose.model('User', userSchema);
+}));
 
 const QualityCode = mongoose.model('QualityCode', new mongoose.Schema({
     code: { type: String, unique: true },
     used: { type: Boolean, default: false }
 }));
 
-// --- ☁️ SERVICES ---
-const s3 = new S3Client({
-    region: "auto",
-    endpoint: process.env.R2_ENDPOINT,
-    credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY }
-});
-
 const client = new Client({ 
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] 
 });
 
-// --- 🎭 FEATURE: ROLE PERSISTENCE ---
+// --- 🎭 ROLE PERSISTENCE ---
 client.on('guildMemberAdd', async (member) => {
     try {
         const u = await User.findOne({ discordId: member.id });
@@ -68,18 +60,15 @@ client.on('guildMemberAdd', async (member) => {
 
 // --- ⚡ INTERACTION ENGINE ---
 client.on('interactionCreate', async (i) => {
-    // [COMMANDS]
     if (i.isChatInputCommand()) {
         const { commandName } = i;
 
         if (commandName === 'submit') {
-            await i.deferReply({ ephemeral: true }); // FIX: Stops "Not Responding"
+            await i.deferReply({ ephemeral: true }); 
             try {
                 let u = await User.findOne({ discordId: i.user.id });
                 if (!u) u = await User.create({ discordId: i.user.id, username: i.user.username });
-                
                 if (Date.now() - u.lastSubmit < 300000) return i.editReply("⏳ **COOLDOWN:** 5 minutes.");
-
                 const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_modal').setLabel('🚀 START UPLINK').setStyle(ButtonStyle.Primary));
                 return i.editReply({ content: "### 💠 ARCHITECT_PORTAL\nReady for transmission.", components: [row] });
             } catch (e) { return i.editReply("❌ DB_ERROR"); }
@@ -97,29 +86,18 @@ client.on('interactionCreate', async (i) => {
             const e = new EmbedBuilder().setDescription(i.options.getString('message')).setColor(i.options.getString('color') || '#00FFCC').setTimestamp();
             return i.reply({ embeds: [e] });
         }
-
-        if (commandName === 'code') {
-            if (!CONFIG.OWNERS.includes(i.user.id)) return i.reply({ content: "❌ OWNER_ONLY", ephemeral: true });
-            const code = crypto.randomBytes(3).toString('hex').toUpperCase();
-            await QualityCode.create({ code });
-            return i.reply({ content: `🎫 **CODE:** \`${code}\``, ephemeral: true });
-        }
     }
 
-    // [BUTTONS & MODALS]
     if (i.isButton() && i.customId.startsWith('rank_')) {
         const [_, type, uid] = i.customId.split('_');
         const member = await i.guild.members.fetch(uid).catch(() => null);
         if (!member) return i.reply({ content: "❌ USER_LEFT", ephemeral: true });
-
         const u = await User.findOne({ discordId: uid });
         const oldRank = u.rank;
         u.rank = type; u.elo += CONFIG.RANKS[type].elo;
         await u.save();
-
         await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
         await member.roles.add(CONFIG.RANKS[type].id);
-
         if (oldRank !== type) {
             const announce = i.guild.channels.cache.find(c => c.name === 'announcements');
             if (announce) announce.send({ embeds: [new EmbedBuilder().setTitle('🚀 PROMOTION').setDescription(`<@${uid}> → **RANK ${type}**`).setColor(CONFIG.RANKS[type].color)] });
@@ -163,12 +141,21 @@ async function boot() {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        
+        // FIXED SLASH COMMANDS (Descriptions added to options)
         const slash = [
             { name: 'submit', description: 'Initialize edit uplink' },
             { name: 'profile', description: 'View profile' },
-            { name: 'code', description: 'Generate quality code' },
-            { name: 'embed', description: 'Staff embed', options: [{name:'message',type:3,required:true},{name:'color',type:3}] }
+            { 
+                name: 'embed', 
+                description: 'Staff embed', 
+                options: [
+                    { name: 'message', description: 'The content of the embed', type: 3, required: true },
+                    { name: 'color', description: 'Hex color code (e.g. #ff0000)', type: 3, required: false }
+                ] 
+            }
         ];
+        
         await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, CONFIG.MAIN_GUILD), { body: slash });
         console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE : Z-TIER ONLINE\u001b[0m\n`);
     } catch (e) { console.error(e); }
