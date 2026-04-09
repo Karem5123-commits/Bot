@@ -1,14 +1,13 @@
 {
-  "name": "architect-omni-kernel",
-  "version": "23.0.0",
-  "description": "High-performance media & management engine",
+  "name": "architect-singularity",
+  "version": "23.6.0",
+  "description": "Lethal Nano-Kernel",
   "main": "main.js",
   "engines": {
     "node": "22.x"
   },
   "scripts": {
-    "start": "node main.js",
-    "dev": "nodemon main.js"
+    "start": "node main.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
