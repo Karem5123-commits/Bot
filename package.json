@@ -1,18 +1,19 @@
 {
-  "name": "singular-sentinel-bot",
-  "version": "2.0.0",
-  "description": "AI Video Transmutation and Ranking Discord Bot",
+  "name": "voidless-powerhouse",
+  "version": "3.0.0",
+  "description": "High-performance AI Video Upscaling & Ranking Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.450.0",
     "axios": "^1.6.0",
     "colors": "^1.4.0",
     "discord.js": "^14.14.1",
     "dotenv": "^16.4.5",
+    "express": "^4.18.2",
     "mongoose": "^8.2.0",
     "nanoid": "^3.3.7",
     "p-queue": "^6.6.2"
