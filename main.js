@@ -30,14 +30,37 @@ const R_IDS = new Set(Object.values(R).map(x => x.i));
 const U = m.model('U', new m.Schema({ i: { type: String, index: 1 }, r: Number, e: { type: Number, default: 0 } }, { versionKey: false }));
 const Q = m.model('Q', new m.Schema({ c: { type: String, index: 1 }, u: { type: Boolean, default: false } }, { versionKey: false }));
 
-// --- 🛰️ FEATURE REGISTRY ---
+// --- 🛰️ FEATURE REGISTRY (REPAIRED) ---
 const definitions = [
     { name: 'quality', description: '💠 AI Media Enhancement' },
     { name: 'submit', description: '🚀 Submit edit for Ranking' },
     { name: 'profile', description: '📊 View your ELO & Rank' },
     { name: 'nuke', description: '☢️ [STAFF] Reset a channel', default_member_permissions: PermissionFlagsBits.ManageChannels.toString() },
-    { name: 'clear', description: '🧹 [STAFF] Purge messages', options: [{name:'amt',type:4,required:true}], default_member_permissions: PermissionFlagsBits.ManageMessages.toString() },
-    { name: 'ban', description: '🔨 [STAFF] Exile member', options: [{name:'user',type:6,required:true},{name:'reason',type:3}], default_member_permissions: PermissionFlagsBits.BanMembers.toString() }
+    { 
+        name: 'clear', 
+        description: '🧹 [STAFF] Purge messages', 
+        options: [{ name: 'amt', type: 4, description: 'Amount of messages to delete', required: true }], 
+        default_member_permissions: PermissionFlagsBits.ManageMessages.toString() 
+    },
+    { 
+        name: 'ban', 
+        description: '🔨 [STAFF] Exile member', 
+        options: [
+            { name: 'user', type: 6, description: 'The target to ban', required: true },
+            { name: 'reason', type: 3, description: 'Reason for the ban', required: false }
+        ], 
+        default_member_permissions: PermissionFlagsBits.BanMembers.toString() 
+    },
+    {
+        name: 'tempban',
+        description: '⏲️ [STAFF] Ban temporarily',
+        options: [
+            { name: 'user', type: 6, description: 'The target to ban', required: true },
+            { name: 'time', type: 3, description: 'Duration (e.g. 1h, 1d)', required: true }
+        ],
+        default_member_permissions: PermissionFlagsBits.BanMembers.toString()
+    },
+    { name: 'lockdown_all', description: '🔒 [STAFF] Lock every channel', default_member_permissions: PermissionFlagsBits.Administrator.toString() }
 ];
 
 // --- 🛠️ BOOT ENGINE ---
@@ -46,7 +69,7 @@ const stamp = () => `[${new Date().toLocaleTimeString()}]`.gray;
 async function step(label, action) {
     process.stdout.write(`${stamp()} ${label} `);
     try { await action(); process.stdout.write(`✓\n`.green); } 
-    catch (err) { process.stdout.write(`✗\n`.red); throw err; }
+    catch (err) { process.stdout.write(`✗\n`.red); console.error(err); throw err; }
 }
 async function progress(label, duration = 800) {
     process.stdout.write(`   ↳ ${label} `);
@@ -72,7 +95,7 @@ if (cluster.isPrimary) {
 
         await step("🛰️ OMNI-SYNC", async () => {
             const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-            await progress("Injecting Global Logic", 700);
+            await progress("Injecting Fixed Definitions", 700);
             await rest.put(Routes.applicationGuildCommands(CONFIG.ID, CONFIG.GUILD), { body: definitions });
         });
 
@@ -113,7 +136,6 @@ if (cluster.isPrimary) {
 
     c.on('interactionCreate', async i => {
         if (i.isChatInputCommand()) {
-            // -- PUBLIC COMMANDS --
             if (i.commandName === 'profile') {
                 const u = await U.findOne({ i: i.user.id }).lean();
                 return i.reply({ embeds: [new EmbedBuilder().setColor(0xFF00FF).setTitle(i.user.username).addFields({ name: 'ELO', value: `${u?.e || 0}`, inline: 1 }, { name: 'RANK', value: RM[u?.r] || 'N/A', inline: 1 })], ephemeral: 1 });
@@ -121,7 +143,6 @@ if (cluster.isPrimary) {
             if (i.commandName === 'quality') return i.showModal(new ModalBuilder().setCustomId('q').setTitle('💠').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c').setLabel('K').setStyle(1)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('u').setLabel('U').setStyle(1))));
             if (i.commandName === 'submit') return i.showModal(new ModalBuilder().setCustomId('s').setTitle('🚀').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('u').setLabel('L').setStyle(1))));
             
-            // -- STAFF COMMANDS --
             if (i.commandName === 'nuke') {
                 const pos = i.channel.position; const newCh = await i.channel.clone();
                 await i.channel.delete(); await newCh.setPosition(pos);
@@ -129,7 +150,7 @@ if (cluster.isPrimary) {
             }
             if (i.commandName === 'clear') {
                 const amt = i.options.getInteger('amt'); await i.channel.bulkDelete(amt > 100 ? 100 : amt);
-                return i.reply({ content: `🧹 Purged ${amt} bytes of chat data.`, ephemeral: 1 });
+                return i.reply({ content: `🧹 Purged ${amt} messages.`, ephemeral: 1 });
             }
             if (i.commandName === 'ban') {
                 const target = i.options.getUser('user'); const reason = i.options.getString('reason') || 'Voidless Exile';
@@ -143,13 +164,13 @@ if (cluster.isPrimary) {
                 const u = i.fields.getTextInputValue('u'), r = new ActionRowBuilder().addComponents(RM.slice(0, 5).map(k => new ButtonBuilder().setCustomId(`rk_${k}_${i.user.id}`).setLabel(k).setStyle(ButtonStyle.Secondary)));
                 const ch = await i.client.channels.fetch(CONFIG.REVIEW);
                 await ch.send({ content: `📥 **Target Submission:** ${i.user.tag}\n${u}`, components: [r] });
-                return i.reply({ content: '📡 Data synced to Review.', ephemeral: 1 });
+                return i.reply({ content: '📡 Data synced.', ephemeral: 1 });
             }
             if (i.customId === 'q') {
                 const k = i.fields.getTextInputValue('c').toUpperCase(), url = i.fields.getTextInputValue('u');
                 await i.deferReply({ ephemeral: 1 });
                 const qCode = await Q.findOne({ c: k, u: false }).lean();
-                if (!qCode) return i.editReply('❌');
+                if (!qCode) return i.editReply('❌ Invalid Code');
                 q.add(async () => {
                     let ff; try {
                         const res = await v(url), pt = new PassThrough({ highWaterMark: 8e6 });
@@ -157,7 +178,7 @@ if (cluster.isPrimary) {
                         const up = S.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: `v_${n(12)}.mp4`, Body: pt, ContentType: 'video/mp4' }));
                         await Promise.all([promisify(pipeline)(res.data, ff.stdin), promisify(pipeline)(ff.stdout, pt), up]);
                         await i.editReply(`✅ ${CONFIG.BASE}`); await Q.updateOne({ _id: qCode._id }, { u: true });
-                    } catch { ff?.kill('SIGKILL'); i.editReply('❌'); }
+                    } catch { ff?.kill('SIGKILL'); i.editReply('❌ Processing Error'); }
                 });
             }
         }
