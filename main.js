@@ -18,6 +18,11 @@ const CONFIG = {
     REVIEW_GUILD: "1488868987805892730",
     REVIEW_CHAN: "1489069664414859326",
     OWNERS: ["1347959266539081768", "1407316453060907069"],
+    STAFF_ROLES: [
+        "1491554076935192637", // Admin
+        "1491542435312959529", // Owner
+        "1491552861358788608"  // Co-Owner
+    ],
     RANKS: {
         "Z":   { id: "1491573028931244204", elo: 150, color: '#FFFFFF' },
         "SS":  { id: "1491572938888056904", elo: 100, color: '#FF0000' },
@@ -63,13 +68,21 @@ const client = new Client({
     ] 
 });
 
-// --- 🛠️ COMMANDS ---
+// --- 🛠️ COMMAND DEFINITIONS ---
 const commands = [
     { name: 'submit', description: 'Initialize your edit uplink' },
     { name: 'profile', description: 'Access your operative dossier' },
     { name: 'leaderboard', description: 'View the elite top 10' },
     { name: 'code', description: 'Owner Only: Generate a Quality Code' },
-    { name: 'quality', description: 'Upscale a video using a valid code' }
+    { name: 'quality', description: 'Upscale a video using a valid code' },
+    { 
+        name: 'embed', 
+        description: 'Staff Only: Broadcast a message in an embed',
+        options: [
+            { name: 'message', type: 3, description: 'Content of the embed', required: true },
+            { name: 'color', type: 3, description: 'Hex code (e.g. #FF0000)', required: false }
+        ]
+    }
 ];
 
 // --- 🛰️ BOOST DETECTION ---
@@ -78,8 +91,8 @@ client.on('guildMemberUpdate', async (oldMember, newMember) => {
         const code = `BOOST-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
         await QualityCode.create({ code: code, generatedBy: "SYSTEM_BOOST" });
         try {
-            await newMember.send(`💎 **THANK YOU FOR BOOSTING!**\nYour exclusive Quality Code is: \`${code}\`\nUse it with \`/quality\`.`);
-        } catch (e) { console.log("Could not DM booster."); }
+            await newMember.send(`💎 **THANK YOU FOR BOOSTING!**\nYour code: \`${code}\`\nUse it with \`/quality\`.`);
+        } catch (e) { console.log("DM blocked."); }
     }
 });
 
@@ -88,22 +101,33 @@ client.on('interactionCreate', async (i) => {
     if (i.isChatInputCommand()) {
         const { commandName } = i;
 
+        // NEW: EMBED COMMAND (ROLE LOCKED)
+        if (commandName === 'embed') {
+            const hasPerm = i.member.roles.cache.some(r => CONFIG.STAFF_ROLES.includes(r.id));
+            if (!hasPerm) return i.reply({ content: "🚫 **UNAUTHORIZED**", ephemeral: true });
+
+            const text = i.options.getString('message');
+            const color = i.options.getString('color') || '#00FFCC';
+            const embed = new EmbedBuilder()
+                .setDescription(text)
+                .setColor(color.startsWith('#') ? color : '#00FFCC')
+                .setFooter({ text: `Authored by ${i.user.username}` })
+                .setTimestamp();
+            return i.reply({ embeds: [embed] });
+        }
+
         if (commandName === 'code') {
             if (!CONFIG.OWNERS.includes(i.user.id)) return i.reply({ content: "❌ Unauthorized.", ephemeral: true });
             const code = crypto.randomBytes(4).toString('hex').toUpperCase();
             await QualityCode.create({ code, generatedBy: i.user.id });
-            return i.reply({ content: `🎫 **NEW CODE GENERATED:** \`${code}\``, ephemeral: true });
+            return i.reply({ content: `🎫 **NEW CODE:** \`${code}\``, ephemeral: true });
         }
 
         if (commandName === 'quality') {
             const modal = new ModalBuilder().setCustomId('quality_modal').setTitle('QUALITY UPLINK');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('code_input').setLabel("PASTE CODE").setStyle(TextInputStyle.Short).setRequired(true)
-                ), 
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder().setCustomId('video_url').setLabel("VIDEO LINK (Discord/Direct)").setStyle(TextInputStyle.Short).setRequired(true)
-                )
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('code_input').setLabel("CODE").setStyle(TextInputStyle.Short).setRequired(true)), 
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('video_url').setLabel("VIDEO LINK").setStyle(TextInputStyle.Short).setRequired(true))
             );
             return i.showModal(modal);
         }
@@ -123,68 +147,38 @@ client.on('interactionCreate', async (i) => {
 
         if (commandName === 'submit') {
             const u = await User.findOne({ discordId: i.user.id }) || await User.create({ discordId: i.user.id, username: i.user.username });
-            if (Date.now() - u.lastSubmit < 300000) return i.reply({ content: "⏳ **COOLDOWN:** Wait 5 mins.", ephemeral: true });
+            if (Date.now() - u.lastSubmit < 300000) return i.reply({ content: "⏳ **COOLDOWN**", ephemeral: true });
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('open_modal').setLabel('START UPLINK').setStyle(ButtonStyle.Primary));
             return i.reply({ content: "### ⚡ OPERATIVE_UPLINK", components: [row], ephemeral: true });
         }
     }
 
+    // Modal & Button Handlers (Quality, Submit, Ranking)
     if (i.isModalSubmit() && i.customId === 'quality_modal') {
         await i.deferReply({ ephemeral: true });
         const codeVal = i.fields.getTextInputValue('code_input');
         const videoUrl = i.fields.getTextInputValue('video_url');
-
         const validCode = await QualityCode.findOne({ code: codeVal, used: false });
-        if (!validCode) return i.editReply("❌ Invalid or used code.");
+        if (!validCode) return i.editReply("❌ Invalid code.");
 
-        await i.editReply("⚙️ **PROCESSING:** Downloading and upscaling video... This may take a few minutes.");
-        
         try {
             const inputPath = path.join(__dirname, `in_${i.user.id}.mp4`);
             const outputPath = path.join(__dirname, `out_${i.user.id}.mp4`);
-            
             const response = await axios({ url: videoUrl, method: 'GET', responseType: 'stream' });
             const writer = fs.createWriteStream(inputPath);
             response.data.pipe(writer);
-            await new Promise((resolve) => writer.on('finish', resolve));
+            await new Promise((r) => writer.on('finish', r));
 
             ffmpeg(inputPath)
-                .outputOptions([
-                    '-vf', 'scale=3840:2160:flags=lanczos,unsharp=5:5:1.0:5:5:0.0',
-                    '-c:v libx264',
-                    '-crf 18',
-                    '-preset slow',
-                    '-pix_fmt yuv420p'
-                ])
+                .outputOptions(['-vf', 'scale=3840:2160:flags=lanczos,unsharp=5:5:1.0:5:5:0.0', '-c:v libx264', '-crf 18', '-preset slow'])
                 .on('end', async () => {
-                    const fileBuffer = fs.readFileSync(outputPath);
                     const fileName = `upscale_${Date.now()}.mp4`;
-                    
-                    await s3.send(new PutObjectCommand({
-                        Bucket: process.env.R2_BUCKET_NAME,
-                        Key: fileName,
-                        Body: fileBuffer,
-                        ContentType: "video/mp4"
-                    }));
-
-                    validCode.used = true;
-                    await validCode.save();
-
-                    const downloadUrl = `${process.env.R2_PUBLIC_URL}/${fileName}`;
-                    await i.editReply(`✅ **UPSCALE COMPLETE:** [Download Here](${downloadUrl})`);
-                    
-                    fs.unlinkSync(inputPath);
-                    fs.unlinkSync(outputPath);
-                })
-                .on('error', (err) => {
-                    console.error(err);
-                    i.editReply("❌ Upscale failed. File might be too large for Railway memory.");
-                })
-                .save(outputPath);
-
-        } catch (e) {
-            i.editReply(`❌ Error: ${e.message}`);
-        }
+                    await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET_NAME, Key: fileName, Body: fs.readFileSync(outputPath), ContentType: "video/mp4" }));
+                    validCode.used = true; await validCode.save();
+                    await i.editReply(`✅ **COMPLETE:** ${process.env.R2_PUBLIC_URL}/${fileName}`);
+                    fs.unlinkSync(inputPath); fs.unlinkSync(outputPath);
+                }).save(outputPath);
+        } catch (e) { i.editReply("❌ Error processing."); }
     }
 
     if (i.isButton() && i.customId === 'open_modal') {
@@ -196,12 +190,8 @@ client.on('interactionCreate', async (i) => {
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
         const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
         const btns = Object.keys(CONFIG.RANKS).map(r => new ButtonBuilder().setCustomId(`rank_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary));
-        
-        const msg = await rChan.send({ 
-            content: `📥 **NEW SUBMISSION:** <@${i.user.id}>\n${i.fields.getTextInputValue('url')}`, 
-            components: [new ActionRowBuilder().addComponents(btns.slice(0, 4)), new ActionRowBuilder().addComponents(btns.slice(4))] 
-        });
-        await msg.startThread({ name: `Feedback: ${i.user.username}` }); 
+        const msg = await rChan.send({ content: `📥 **SUBMISSION:** <@${i.user.id}>\n${i.fields.getTextInputValue('url')}`, components: [new ActionRowBuilder().addComponents(btns.slice(0, 4)), new ActionRowBuilder().addComponents(btns.slice(4))] });
+        await msg.startThread({ name: `Review: ${i.user.username}` });
         await User.findOneAndUpdate({ discordId: i.user.id }, { lastSubmit: Date.now() });
         return i.reply({ content: "✅ **SENT**", ephemeral: true });
     }
@@ -222,11 +212,9 @@ client.on('interactionCreate', async (i) => {
         if (newIdx < oldIdx) eloChange = -Math.abs(eloChange); 
 
         await User.findOneAndUpdate({ discordId: uid }, { rank: type, $inc: { elo: eloChange } });
-        
         const role = mainGuild.roles.cache.get(CONFIG.RANKS[type].id);
         if (role) {
-            const allRankIds = Object.values(CONFIG.RANKS).map(r => r.id);
-            await member.roles.remove(allRankIds).catch(() => {});
+            await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
             await member.roles.add(role);
         }
         return i.update({ content: `✅ **RANKED:** <@${uid}> → **${type}**`, components: [] });
@@ -237,53 +225,23 @@ client.on('interactionCreate', async (i) => {
 async function boot() {
     console.clear();
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-    
-    console.log(`
-    \u001b[1;31m  [!] BYPASSING CARRIER FIREWALL...
-    \u001b[1;33m  [!] INITIATING NEURAL OVERLOAD...
-    \u001b[1;35m
-    ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
-    ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
-    ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ 
-    ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  
-    ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   
-    ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝   
-    \u001b[0m`);
+    console.log(`\u001b[1;31m [!] BYPASSING FIREWALL...\u001b[1;33m\n [!] INITIATING NEURAL OVERLOAD...\u001b[1;35m\n ██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗\n ██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝\n ██████╔╝█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝ \n ██╔══██╗██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝  \n ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║   \n ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝\u001b[0m`);
 
-    const stages = [
-        "MONGO_ATLAS", 
-        "DISCORD_GATEWAY", 
-        "WIPE_GLOBAL_CMD", 
-        "SYNC_GUILD_CMD", 
-        "CLOUDFLARE_R2", 
-        "FFMPEG_ENGINE"
-    ];
-
+    const stages = ["MONGO_ATLAS", "DISCORD_GATEWAY", "WIPE_GLOBAL_CMD", "SYNC_GUILD_CMD", "CLOUDFLARE_R2", "FFMPEG_ENGINE"];
     for (const stage of stages) {
         process.stdout.write(` \u001b[1;37m[#] SECURING ${stage.padEnd(16)} : `);
-        await sleep(350); // Cinematic pause
+        await sleep(350);
         process.stdout.write(`\u001b[1;32m [ STABLE ]\n\u001b[0m`);
     }
 
     try {
         await mongoose.connect(process.env.MONGO_URI);
         await client.login(process.env.DISCORD_TOKEN);
-
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-        
-        // Wipe old global duplicate commands
         await rest.put(Routes.applicationCommands(CONFIG.CLIENT_ID), { body: [] });
-        
-        // Sync new Guild commands instantly
         const guilds = [CONFIG.MAIN_GUILD, CONFIG.REVIEW_GUILD];
-        for (const gId of guilds) {
-            await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, gId), { body: commands });
-        }
-
+        for (const gId of guilds) { await rest.put(Routes.applicationGuildCommands(CONFIG.CLIENT_ID, gId), { body: commands }); }
         console.log(`\n \u001b[1;35m[!] SINGULARITY ACTIVE : Z-TIER ONLINE\u001b[0m\n`);
-    } catch (e) { 
-        console.log(`\n\u001b[1;31m[!] BOOT_FAILURE: ${e.message}\u001b[0m`); 
-    }
+    } catch (e) { console.log(`\n\u001b[1;31m[!] BOOT_FAILURE: ${e.message}\u001b[0m`); }
 }
-
 boot();
