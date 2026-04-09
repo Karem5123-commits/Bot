@@ -13,7 +13,7 @@ const CONFIG = {
     REVIEW_CHAN: "1489069664414859326",
     STAFF_ROLES: ["1491554076935192637", "1491542435312959529", "1491552861358788608"],
     OWNERS: ["1347959266539081768", "1407316453060907069"],
-    FOOTER: "💠 ARCHITECT NEURAL LINK // V.6.0.0",
+    FOOTER: "💠 ARCHITECT NEURAL LINK // V.6.1.0",
     RANKS: {
         "Z":   { id: "1491573028931244204", elo: 150, color: '#FFFFFF' },
         "SS":  { id: "1491572938888056904", elo: 100, color: '#FF0000' },
@@ -64,7 +64,6 @@ client.on('interactionCreate', async (i) => {
     if (i.isChatInputCommand()) {
         const { commandName } = i;
 
-        // 🚀 SUBMIT (DIRECT TO MODAL)
         if (commandName === 'submit') {
             const modal = new ModalBuilder().setCustomId('sub_modal').setTitle('⚡ UPLINK: TRANSMIT DATA');
             modal.addComponents(
@@ -72,10 +71,9 @@ client.on('interactionCreate', async (i) => {
                     new TextInputBuilder().setCustomId('url').setLabel("EDIT URL (STREAMABLE/YOUTUBE)").setStyle(TextInputStyle.Short).setRequired(true)
                 )
             );
-            return i.showModal(modal); // Instant, impossible to timeout
+            return i.showModal(modal); 
         }
 
-        // 👤 PROFILE
         if (commandName === 'profile') {
             await i.deferReply();
             let u = await User.findOne({ discordId: i.user.id }) || await User.create({ discordId: i.user.id, username: i.user.username });
@@ -92,7 +90,6 @@ client.on('interactionCreate', async (i) => {
             return i.editReply({ embeds: [embed] });
         }
 
-        // 🏆 LEADERBOARD
         if (commandName === 'leaderboard') {
             await i.deferReply();
             const topUsers = await User.find({ elo: { $gt: 0 } }).sort({ elo: -1 }).limit(10);
@@ -111,7 +108,6 @@ client.on('interactionCreate', async (i) => {
             return i.editReply({ embeds: [embed] });
         }
 
-        // 🎫 REDEEM CODE
         if (commandName === 'redeem') {
             await i.deferReply({ ephemeral: true });
             const codeInput = i.options.getString('code').toUpperCase();
@@ -125,13 +121,12 @@ client.on('interactionCreate', async (i) => {
             await qCode.save();
 
             let u = await User.findOne({ discordId: i.user.id }) || await User.create({ discordId: i.user.id, username: i.user.username });
-            u.elo += 50; // Bonus ELO
+            u.elo += 50; 
             await u.save();
 
             return i.editReply(`✅ **CODE REDEEMED!** Sequence accepted. \`+50 ELO\` added to your dossier.`);
         }
 
-        // 🔑 OWNER: GENERATE CODE
         if (commandName === 'code') {
             if (!CONFIG.OWNERS.includes(i.user.id)) return i.reply({ content: "❌ OVERRIDE DENIED.", ephemeral: true });
             const code = crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -139,7 +134,6 @@ client.on('interactionCreate', async (i) => {
             return i.reply({ content: `🎫 **NEW QUALITY CODE:** \`${code}\`\n*(Grants +50 ELO to whoever redeems it)*`, ephemeral: true });
         }
 
-        // 📊 OWNER: STATS
         if (commandName === 'stats') {
             if (!CONFIG.OWNERS.includes(i.user.id)) return i.reply({ content: "❌ OVERRIDE DENIED.", ephemeral: true });
             await i.deferReply({ ephemeral: true });
@@ -148,7 +142,6 @@ client.on('interactionCreate', async (i) => {
             return i.editReply(`### 📈 SYSTEM METRICS\n* **Registered Operatives:** \`${userCount}\`\n* **Redeemed Codes:** \`${codesUsed}\``);
         }
 
-        // 🛠️ STAFF: EMBED
         if (commandName === 'embed') {
             if (!i.member.roles.cache.some(r => CONFIG.STAFF_ROLES.includes(r.id))) return i.reply({ content: "🚫 UNAUTHORIZED", ephemeral: true });
             const e = new EmbedBuilder().setDescription(i.options.getString('message')).setColor(i.options.getString('color') || '#00FFCC').setFooter({ text: CONFIG.FOOTER });
@@ -160,27 +153,25 @@ client.on('interactionCreate', async (i) => {
     // 2. MODAL SUBMISSIONS (The Uplink)
     // ==========================================
     if (i.isModalSubmit() && i.customId === 'sub_modal') {
-        await i.deferReply({ ephemeral: true }); // Secure DB time
+        await i.deferReply({ ephemeral: true }); 
         try {
             let u = await User.findOne({ discordId: i.user.id });
             if (!u) u = await User.create({ discordId: i.user.id, username: i.user.username });
             
-            // Cooldown check (5 mins)
             if (Date.now() - u.lastSubmit < 300000) return i.editReply("⏳ **OVERHEATING:** Uplink is on cooldown. Wait 5 minutes.");
 
-            // Update user stats
             u.lastSubmit = Date.now();
             u.totalSubmits += 1;
             await u.save();
 
-            // Send to review channel
             const rChan = client.channels.cache.get(CONFIG.REVIEW_CHAN);
             const btns = Object.keys(CONFIG.RANKS).map(r => 
                 new ButtonBuilder().setCustomId(`rank_${r}_${i.user.id}`).setLabel(r).setStyle(ButtonStyle.Secondary)
             );
             
+            // ⚡ Added @everyone ping here
             const msg = await rChan.send({ 
-                content: `📥 **NEW UPLINK DETECTED:** <@${i.user.id}>\n🔗 ${i.fields.getTextInputValue('url')}`, 
+                content: `@everyone\n📥 **NEW UPLINK DETECTED:** <@${i.user.id}>\n🔗 ${i.fields.getTextInputValue('url')}`, 
                 components: [
                     new ActionRowBuilder().addComponents(btns.slice(0, 4)), 
                     new ActionRowBuilder().addComponents(btns.slice(4))
@@ -199,42 +190,70 @@ client.on('interactionCreate', async (i) => {
     // 3. RANK BUTTON CLICKS (Staff Grading)
     // ==========================================
     if (i.isButton() && i.customId.startsWith('rank_')) {
-        const [_, type, uid] = i.customId.split('_');
-        const member = await i.guild.members.fetch(uid).catch(() => null);
-        if (!member) return i.reply({ content: "❌ TARGET_NOT_FOUND (User left the server)", ephemeral: true });
+        await i.deferUpdate(); 
 
-        const u = await User.findOne({ discordId: uid });
-        const oldRank = u.rank;
-        u.rank = type; 
-        u.elo += CONFIG.RANKS[type].elo;
-        await u.save();
+        try {
+            const [_, type, uid] = i.customId.split('_');
+            
+            // ⚡ FIX: Fetch the MAIN server first, then find the user there!
+            const mainGuild = await client.guilds.fetch(CONFIG.MAIN_GUILD).catch(() => null);
+            if (!mainGuild) return await i.followUp({ content: "❌ **ERROR:** Could not connect to the Main Server.", ephemeral: true });
 
-        // Role management
-        await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id)).catch(() => {});
-        await member.roles.add(CONFIG.RANKS[type].id);
+            // Fetch the member from the MAIN server, not the review server
+            const member = await mainGuild.members.fetch(uid).catch(() => null);
+            
+            if (!member) {
+                return await i.followUp({ content: "❌ **TARGET_NOT_FOUND:** Cannot assign role. User left the main server.", ephemeral: true });
+            }
 
-        // Remove buttons from the staff review message so it can't be clicked twice
-        await i.update({ content: `✅ **GRADED:** <@${uid}> has been assigned **Rank ${type}** by ${i.user.username}.`, components: [] });
+            const u = await User.findOne({ discordId: uid });
+            if (!u) return await i.followUp({ content: "❌ **DATABASE ERROR:** User profile not found.", ephemeral: true });
 
-        // Announcements & DMs
-        if (oldRank !== type) {
-            const announce = i.guild.channels.cache.find(c => c.name === 'announcements');
-            if (announce) announce.send({ 
-                embeds: [new EmbedBuilder()
-                    .setTitle('🚀 RANK PROMOTION')
-                    .setDescription(`<@${uid}> has ascended to **RANK ${type}**!`)
-                    .setColor(CONFIG.RANKS[type].color)
-                    .setFooter({ text: CONFIG.FOOTER })] 
-            });
+            const oldRank = u.rank;
+            u.rank = type; 
+            u.elo += CONFIG.RANKS[type].elo;
+            await u.save();
 
-            // DM the user their receipt
-            member.send({
-                embeds: [new EmbedBuilder()
-                    .setTitle('💠 ARCHITECT SYSTEM UPDATE')
-                    .setDescription(`Your recent uplink has been analyzed.\nYou have been promoted to **Rank ${type}**.\n\n` +
-                                    `*Total ELO: ${u.elo}*\nKeep up the excellent work.`)
-                    .setColor(CONFIG.RANKS[type].color)]
-            }).catch(() => console.log("User has DMs disabled."));
+            // ⚡ Role management (Happens in the MAIN server)
+            try {
+                await member.roles.remove(Object.values(CONFIG.RANKS).map(r => r.id));
+                await member.roles.add(CONFIG.RANKS[type].id);
+            } catch (roleErr) {
+                console.error("Role Error:", roleErr);
+                return await i.followUp({ 
+                    content: "⚠️ **PERMISSION ERROR:** I updated their database profile, but I can't give them the role in the Main Server! Make sure my Bot Role is dragged higher than the rank roles.", 
+                    ephemeral: true 
+                });
+            }
+
+            // Update message
+            await i.editReply({ content: `✅ **GRADED:** <@${uid}> has been assigned **Rank ${type}** by <@${i.user.id}>.`, components: [] });
+
+            // Announcements & DMs (Happens in the MAIN server)
+            if (oldRank !== type) {
+                const announce = mainGuild.channels.cache.find(c => c.name === 'announcements');
+                if (announce) {
+                    announce.send({ 
+                        embeds: [new EmbedBuilder()
+                            .setTitle('🚀 RANK PROMOTION')
+                            .setDescription(`<@${uid}> has ascended to **RANK ${type}**!`)
+                            .setColor(CONFIG.RANKS[type].color)
+                            .setFooter({ text: CONFIG.FOOTER })] 
+                    }).catch(()=>{});
+                }
+
+                member.send({
+                    embeds: [new EmbedBuilder()
+                        .setTitle('💠 ARCHITECT SYSTEM UPDATE')
+                        .setDescription(`Your recent uplink has been analyzed.\nYou have been promoted to **Rank ${type}**.\n\n` +
+                                        `*Total ELO: ${u.elo}*\nKeep up the excellent work.`)
+                        .setColor(CONFIG.RANKS[type].color)]
+                }).catch(() => console.log("User has DMs disabled."));
+            }
+
+        } catch (err) {
+            console.error("Button Click Error:", err);
+            await i.followUp({ content: "❌ **SYSTEM FAILURE:** An error occurred while grading.", ephemeral: true });
         }
     }
 });
