@@ -1,23 +1,40 @@
-const cmdList = [
-    { name: 'submit', description: 'Submit an edit link' },
-    { 
-        name: 'quality', 
-        description: 'Access AI Upscale Panel',
-        options: [
-            {
-                name: 'code',
-                description: 'The secret quality method code', // MUST HAVE THIS
-                type: 3, 
-                required: true
-            },
-            {
-                name: 'url',
-                description: 'The direct video download link', // MUST HAVE THIS
-                type: 3,
-                required: true
-            }
-        ]
-    },
-    { name: 'profile', description: 'Check your stats' },
-    { name: 'code', description: 'Owner: Generate codes' }
-];
+{
+  "name": "architect-neural-link",
+  "version": "10.0.0",
+  "description": "High-performance AI Upscaling & Ranking Singularity",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "dev": "nodemon main.js",
+    "lint": "eslint .",
+    "neural-check": "ffmpeg -version && node -v"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "ai",
+    "upscale",
+    "ffmpeg",
+    "r2",
+    "neural-link"
+  ],
+  "author": "Architect",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "mongoose": "^8.2.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.6.7",
+    "@aws-sdk/client-s3": "^3.525.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "form-data": "^4.0.0",
+    "canvas": "^2.11.2",
+    "colors": "^1.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
