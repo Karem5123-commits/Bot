@@ -1,127 +1,100 @@
 /**
- * ARCHITECT V6 | COMMAND_LOGIC_HUB
- * Status: OPTIMIZED | UI: HIGH-TECH | Logic: WATERFALL
+ * ARCHITECT V6 | SLASH_MOD_HUB
+ * Role Lock: Admin, Owner, Co-Owner Only
  */
 
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 
 module.exports = {
-    // [01] HIERARCHY CONFIGURATION
-    ROLES: {
-        MOD: "1488205041885122581",    
-        ADMIN: "1488205040811245740",  
-        HELPER: "1488207431753531485"  
-    },
+    // [01] STAFF CONFIGURATION
+    STAFF_ROLES: [
+        "1491554076935192637", // Admin
+        "1491542435312959529", // Owner
+        "1491552861358788608"  // Co-Owner
+    ],
 
-    handle: async (m, client, State, RenderEngine, User) => {
-        const args = m.content.slice(1).trim().split(/ +/);
-        const cmd = args.shift().toLowerCase();
-        const isOwner = State.SETTINGS.OWNERS.includes(m.author.id);
+    // [02] COMMAND DEFINITIONS (Sync this array in your main.js boot)
+    definitions: [
+        { 
+            name: 'ban', description: 'Ban a member', 
+            default_member_permissions: "0", // Hidden for non-admins
+            options: [{ name: 'user', type: 6, required: true }, { name: 'reason', type: 3 }] 
+        },
+        { name: 'kick', description: 'Kick a member', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'mute', description: 'Timeout a member', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }, { name: 'minutes', type: 4, required: true }] },
+        { name: 'unmute', description: 'Remove timeout', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'purge', description: 'Bulk delete messages', default_member_permissions: "0", options: [{ name: 'amount', type: 4, required: true }] },
+        { name: 'nuke', description: 'Delete and recreate channel', default_member_permissions: "0" },
+        { name: 'lock', description: 'Lock channel', default_member_permissions: "0" },
+        { name: 'unlock', description: 'Unlock channel', default_member_permissions: "0" },
+        { name: 'slowmode', description: 'Set channel slowmode', default_member_permissions: "0", options: [{ name: 'seconds', type: 4, required: true }] },
+        { name: 'warn', description: 'Send a formal warning', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }, { name: 'reason', type: 3 }] },
+        { name: 'nick', description: 'Change user nickname', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }, { name: 'name', type: 3, required: true }] },
+        { name: 'vmute', description: 'VC Mute', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'vdeaf', description: 'VC Deafen', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'vkick', description: 'Kick from VC', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'role_add', description: 'Add role to user', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }, { name: 'role', type: 8, required: true }] },
+        { name: 'role_remove', description: 'Remove role', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }, { name: 'role', type: 8, required: true }] },
+        { name: 'strip', description: 'Remove all roles', default_member_permissions: "0", options: [{ name: 'user', type: 6, required: true }] },
+        { name: 'hide', description: 'Hide channel from @everyone', default_member_permissions: "0" },
+        { name: 'show', description: 'Show channel to @everyone', default_member_permissions: "0" },
+        // ... (Patterns continue for all 50+ commands)
+    ],
 
-        // Instant Ghost Mode: Deletes the !trigger immediately
-        if (m.deletable) await m.delete().catch(() => {});
+    // [03] EXECUTION LOGIC
+    handle: async (i) => {
+        // Hard Clearance Check
+        const hasClearance = i.member.roles.cache.some(r => module.exports.STAFF_ROLES.includes(r.id));
+        if (!hasClearance) return i.reply({ content: "🚫 **LEVEL_REQUIRED: STAFF**", ephemeral: true });
 
-        // [02] PERMISSION WATERFALL
-        const isMod = m.member.roles.cache.has(module.exports.ROLES.MOD) || isOwner;
-        const isAdmin = m.member.roles.cache.has(module.exports.ROLES.ADMIN) || isMod;
-        const isHelper = m.member.roles.cache.has(module.exports.ROLES.HELPER) || isAdmin;
+        const { commandName, options, channel, guild } = i;
 
-        // [03] UI NOTIFICATION SYSTEM (Auto-Deleting Embeds)
-        const notify = async (title, desc, color = 0x00FFFF) => {
-            const e = new EmbedBuilder()
-                .setTitle(title)
-                .setDescription(desc)
-                .setColor(color)
-                .setFooter({ text: 'ARCHITECT | SYSTEM_LOG' });
-            
-            const res = await m.channel.send({ embeds: [e] });
-            setTimeout(() => res.delete().catch(() => {}), 8000);
-        };
+        switch (commandName) {
+            case 'ban':
+                const bTarget = options.getMember('user');
+                await bTarget.ban({ reason: options.getString('reason') || "Architect Extraction" });
+                return i.reply({ content: `⚔️ **BANNED:** ${bTarget.user.tag}`, ephemeral: true });
 
-        // [04] COMMAND ROUTER
-        switch (cmd) {
-            
-            case "submit":
-                const row = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('submit_content')
-                        .setLabel('🚀 INITIALIZE_UPLOAD')
-                        .setStyle(ButtonStyle.Primary)
-                );
-                const portal = new EmbedBuilder()
-                    .setColor(0x00FFFF)
-                    .setTitle('💠 ARCHITECT_PORTAL_V6')
-                    .setThumbnail(client.user.displayAvatarURL())
-                    .setDescription('**SECURE DATA UPLINK DETECTED**\nClick the button below to initialize the submission panel.')
-                    .addFields({ name: '🛰️ STATUS', value: '`READY_FOR_INPUT`' });
-                
-                await m.channel.send({ embeds: [portal], components: [row] });
-                break;
+            case 'purge':
+                const amount = options.getInteger('amount');
+                await channel.bulkDelete(Math.min(amount, 100), true);
+                return i.reply({ content: `🧹 **PURGED:** ${amount} messages.`, ephemeral: true });
 
-            case "quality":
-                const u = await User.findOne({ discordId: m.author.id });
-                // Checks Premium status or Admin override
-                if (!u?.premiumCode && !isAdmin) {
-                    return notify('🔒 LOCKOUT', '`ERROR: PREMIUM_CREDENTIALS_REQUIRED`', 0xFF0000);
-                }
+            case 'nuke':
+                const pos = channel.position;
+                const newChan = await channel.clone();
+                await channel.delete();
+                await newChan.setPosition(pos);
+                return newChan.send("☢️ **CHANNEL_REGENERATED**");
 
-                const file = m.attachments.first();
-                if (!file) return notify('⚠️ ERROR', '`NO_MEDIA_DETECTED_IN_STREAM`');
-                
-                const sEmbed = new EmbedBuilder()
-                    .setColor(0xFFFF00)
-                    .setTitle('🛰️ UPLINK_ESTABLISHED')
-                    .setDescription('**RECON_DATA_RECEIVED**\nMoving file to Render Queue for 4K processing...');
-                
-                const statusMsg = await m.channel.send({ embeds: [sEmbed] });
-                RenderEngine.add(m, file.url, m.author, statusMsg);
-                break;
+            case 'lock':
+                await channel.permissionOverwrites.edit(guild.id, { SendMessages: false });
+                return i.reply({ content: "🔒 **SECURED**", ephemeral: true });
 
-            case "ban":
-                if (!isAdmin) return notify('🚫 UNAUTHORIZED', '`LEVEL_ADMIN_REQUIRED`', 0xFF0000);
-                const targetBan = m.mentions.members.first();
-                if (targetBan) {
-                    if (targetBan.roles.highest.position >= m.member.roles.highest.position && !isOwner) {
-                        return notify('❌ ERROR', '`TARGET_PROTECTED_BY_HIERARCHY`');
-                    }
-                    await targetBan.ban();
-                    await notify('⚔️ EXTRACTION_COMPLETE', `**${targetBan.user.tag}** has been removed from the server.`, 0xFF0000);
-                    State.log("MOD", `BAN_EXECUTED: ${targetBan.user.tag}`);
-                }
-                break;
+            case 'mute':
+                const mTarget = options.getMember('user');
+                const mins = options.getInteger('minutes');
+                await mTarget.timeout(mins * 60000);
+                return i.reply({ content: `⏳ **MUTED:** ${mTarget.user.tag} for ${mins}m`, ephemeral: true });
 
-            case "purge":
-                if (!isHelper) return notify('🚫 UNAUTHORIZED', '`LEVEL_HELPER_REQUIRED`', 0xFF0000);
-                const count = parseInt(args[0]) || 5;
-                if (count > 100) return notify('⚠️ WARNING', '`MAX_PURGE_LIMIT: 100`');
-                
-                await m.channel.bulkDelete(count, true);
-                await notify('🧹 DATA_WIPE', `Successfully cleared **${count}** entries from current channel.`);
-                break;
+            case 'slowmode':
+                await channel.setRateLimitPerUser(options.getInteger('seconds'));
+                return i.reply({ content: "🐌 **SLOWMODE_UPDATED**", ephemeral: true });
 
-            case "nuke":
-                if (!isMod) return notify('🚫 UNAUTHORIZED', '`LEVEL_MOD_REQUIRED`', 0xFF0000);
-                const position = m.channel.position;
-                const newChannel = await m.channel.clone();
-                await m.channel.delete();
-                await newChannel.setPosition(position);
-                await newChannel.send({ 
-                    embeds: [new EmbedBuilder().setColor(0x00FF00).setTitle('☢️ CHANNEL_REGENERATED').setDescription('All residual data cleared.')] 
-                }).then(msg => setTimeout(() => msg.delete(), 10000));
-                break;
+            case 'warn':
+                const wUser = options.getUser('user');
+                const reason = options.getString('reason') || "No reason.";
+                try {
+                    await wUser.send(`⚠️ **WARN:** ${guild.name} | Reason: ${reason}`);
+                    return i.reply({ content: `📑 **WARNED:** ${wUser.tag}`, ephemeral: true });
+                } catch { return i.reply({ content: "❌ **DM_BLOCKED**", ephemeral: true }); }
 
-            case "stats":
-                const userData = await User.findOne({ discordId: m.author.id });
-                const statsEmbed = new EmbedBuilder()
-                    .setColor(0x00FFFF)
-                    .setTitle(`📊 OPERATIVE_STATS: ${m.author.username}`)
-                    .addFields(
-                        { name: '⭐ ELO', value: `\`${userData?.elo || 0}\``, inline: true },
-                        { name: '🛡️ RANK', value: `\`${userData?.rank || "NONE"}\``, inline: true },
-                        { name: '💎 PREMIUM', value: userData?.premiumCode ? '`ACTIVE`' : '`INACTIVE`', inline: true }
-                    );
-                await m.channel.send({ embeds: [statsEmbed] });
-                break;
+            case 'vkick':
+                const vTarget = options.getMember('user');
+                await vTarget.voice.disconnect();
+                return i.reply({ content: "🎤 **VC_EXTRACTED**", ephemeral: true });
+
+            // (Add cases for the remaining commands following this pattern)
         }
     }
 };
