@@ -1,14 +1,23 @@
-{
-  "name": "architect-bot",
-  "version": "1.0.0",
-  "main": "main.js",
-  "dependencies": {
-    "discord.js": "^14.13.0",
-    "mongoose": "^7.6.3",
-    "dotenv": "^16.3.1",
-    "axios": "^1.6.0",
-    "fluent-ffmpeg": "^2.1.2",
-    "@aws-sdk/client-s3": "^3.427.0",
-    "colors": "^1.4.0"
-  }
-}
+const cmdList = [
+    { name: 'submit', description: 'Submit an edit link' },
+    { 
+        name: 'quality', 
+        description: 'Access AI Upscale Panel',
+        options: [
+            {
+                name: 'code',
+                description: 'The secret quality method code', // MUST HAVE THIS
+                type: 3, 
+                required: true
+            },
+            {
+                name: 'url',
+                description: 'The direct video download link', // MUST HAVE THIS
+                type: 3,
+                required: true
+            }
+        ]
+    },
+    { name: 'profile', description: 'Check your stats' },
+    { name: 'code', description: 'Owner: Generate codes' }
+];
