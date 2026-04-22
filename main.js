@@ -16,9 +16,9 @@ const express = require(‘express’);
 const app = express();
 app.use(express.json());
 
-// ─────────────────────────────────────────────
-// CONFIG — Fill these in before running
-// ─────────────────────────────────────────────
+// ———————————————
+// CONFIG – Fill these in before running
+// ———————————————
 const CONFIG = {
 token:           process.env.DISCORD_TOKEN,
 clientId:        process.env.CLIENT_ID,
@@ -34,9 +34,9 @@ jackpotCut:      0.05,
 rankRoles:       {},    // auto-detected per guild at startup
 };
 
-// ─────────────────────────────────────────────
+// ———————————————
 // LOGGER
-// ─────────────────────────────────────────────
+// ———————————————
 function log(level, …args) {
 const ts = new Date().toISOString().replace(‘T’, ’ ’).slice(0, 19);
 const icons = { INFO: ‘i’, WARN: ‘!’, ERROR: ‘X’, SUCCESS: ‘OK’ };
@@ -45,9 +45,9 @@ console.log(`[${ts}] [${icons[level] || level}]`, …args);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-// ─────────────────────────────────────────────
+// ———————————————
 // BOOT SEQUENCE
-// ─────────────────────────────────────────────
+// ———————————————
 async function bootSequence() {
 console.clear();
 console.log(‘GOD MODE DISCORD BOT v2’);
@@ -59,12 +59,12 @@ for (const sys of systems) {
 await sleep(100);
 console.log(`  [OK] ${sys}`);
 }
-console.log(’\nTERMINAL ACTIVATED — ALL SYSTEMS ONLINE\n’);
+console.log(’\nTERMINAL ACTIVATED – ALL SYSTEMS ONLINE\n’);
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // DATABASE + INDEXES
-// ─────────────────────────────────────────────
+// ———————————————
 let db, mongoClient;
 
 async function connectDB() {
@@ -86,7 +86,7 @@ db = mongoClient.db(CONFIG.dbName);
 } catch (err) {
   log('ERROR', `MongoDB attempt ${attempt} failed: ${err.message}`);
   if (attempt < 5) { await sleep(attempt * 2000); return tryConnect(attempt + 1); }
-  throw new Error('MongoDB failed after 5 attempts — check your URI');
+  throw new Error('MongoDB failed after 5 attempts -- check your URI');
 }
 ```
 
@@ -95,9 +95,9 @@ db = mongoClient.db(CONFIG.dbName);
 await tryConnect();
 }
 
-// ─────────────────────────────────────────────
-// USER CACHE — reduces DB reads by ~80%
-// ─────────────────────────────────────────────
+// ———————————————
+// USER CACHE – reduces DB reads by ~80%
+// ———————————————
 const userCache = new Map();
 const CACHE_TTL  = 60_000; // 1 minute
 
@@ -139,7 +139,7 @@ throw err;
 async function updateUser(userId, update) {
 try {
 await db.collection(‘users’).updateOne({ userId }, { $set: update }, { upsert: true });
-// Merge into cache — keeps cache warm without a DB round-trip
+// Merge into cache – keeps cache warm without a DB round-trip
 const cached = getCached(userId);
 if (cached) setCache(userId, { …cached, …update });
 } catch (err) {
@@ -148,9 +148,9 @@ throw err;
 }
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // JACKPOT POOL
-// ─────────────────────────────────────────────
+// ———————————————
 async function addToJackpot(amount) {
 const cut = Math.floor(amount * CONFIG.jackpotCut);
 if (cut <= 0) return;
@@ -176,9 +176,9 @@ await db.collection(‘jackpot’).updateOne({ id: ‘main’ }, { $set: { pool:
 } catch {}
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // RATE LIMITER
-// ─────────────────────────────────────────────
+// ———————————————
 const rateLimits = new Map();
 const COOLDOWNS  = {
 daily: 86_400_000, slots: 3_000, roulette: 3_000, coinflip: 2_000,
@@ -198,9 +198,9 @@ rateLimits.set(key, Date.now());
 return null;
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // AUTO-DETECT: RANK ROLES + CHANNELS
-// ─────────────────────────────────────────────
+// ———————————————
 
 // Per-guild role map so the bot works correctly on multiple servers
 const guildRankRoles = new Map();
@@ -239,7 +239,7 @@ if (bestRole && bestScore <= 3) {
   roles[target] = bestRole.id;
   log('SUCCESS', `Auto-detected rank role "${target}" -> "${bestRole.name}" (${bestRole.id}) [score ${bestScore}]`);
 } else {
-  log('WARN', `No matching role found for rank "${target}" in ${guild.name} — create a role named "${target}" or similar`);
+  log('WARN', `No matching role found for rank "${target}" in ${guild.name} -- create a role named "${target}" or similar`);
 }
 ```
 
@@ -272,20 +272,20 @@ if (reviewCh) {
 CONFIG.reviewChannelId = reviewCh.id;
 log(‘SUCCESS’, `Auto-detected review channel -> #${reviewCh.name} (${reviewCh.id})`);
 } else {
-log(‘WARN’, `No review channel found in ${guild.name} — create a channel named "clip-review"`);
+log(‘WARN’, `No review channel found in ${guild.name} -- create a channel named "clip-review"`);
 }
 
 if (logCh) {
 CONFIG.logChannelId = logCh.id;
 log(‘SUCCESS’, `Auto-detected log channel -> #${logCh.name} (${logCh.id})`);
 } else {
-log(‘WARN’, `No mod-log channel found in ${guild.name} — create a channel named "mod-logs"`);
+log(‘WARN’, `No mod-log channel found in ${guild.name} -- create a channel named "mod-logs"`);
 }
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // RANK SYSTEM
-// ─────────────────────────────────────────────
+// ———————————————
 const RANK_ELO = { D: 0, C: 100, B: 250, A: 500, S: 1000, SS: 2000, SSS: 5000 };
 
 function getRankFromElo(elo) {
@@ -311,15 +311,15 @@ const newRoleId = roles[rank];
 if (newRoleId) {
 const role = guild.roles.cache.get(newRoleId);
 if (role) await member.roles.add(role);
-else log(‘WARN’, `Role ID ${newRoleId} for rank ${rank} not found in cache — re-running auto-detect`);
+else log(‘WARN’, `Role ID ${newRoleId} for rank ${rank} not found in cache -- re-running auto-detect`);
 }
 } catch (err) { log(‘WARN’, `applyRank ${member.id}: ${err.message}`); }
 return rank;
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // XP / LEVELING
-// ─────────────────────────────────────────────
+// ———————————————
 const XP_COOLDOWNS = new Map();
 
 async function handleXP(message) {
@@ -350,9 +350,9 @@ if (newXP >= xpNeeded) {
 } catch (err) { log(‘WARN’, `XP error: ${err.message}`); }
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // MOD LOG CHANNEL
-// ─────────────────────────────────────────────
+// ———————————————
 async function modLog(guild, action, moderator, target, reason = ‘No reason’) {
 try {
 const ch = guild.channels.cache.get(CONFIG.logChannelId);
@@ -370,9 +370,9 @@ await ch.send({ embeds: [embed] });
 } catch (err) { log(‘WARN’, `modLog: ${err.message}`); }
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // GAMBLING HELPERS
-// ─────────────────────────────────────────────
+// ———————————————
 function spinSlots() {
 const symbols = [‘cherry’,‘lemon’,‘diamond’,‘seven’,‘bell’,‘star’];
 const emoji   = { cherry:‘cherry’, lemon:‘lemon’, diamond:‘diamond’, seven:‘777’, bell:‘bell’, star:‘star’ };
@@ -421,16 +421,16 @@ invalidateCache(userId);
 } catch {}
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // AUTO DELETE
-// ─────────────────────────────────────────────
+// ———————————————
 function autoDelete(msg, seconds = CONFIG.autoDeleteSeconds) {
 if (msg?.deletable) setTimeout(() => msg.delete().catch(() => {}), seconds * 1000);
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // FUZZY MATCHING (typo correction)
-// ─────────────────────────────────────────────
+// ———————————————
 function levenshtein(a, b) {
 const dp = Array.from({ length: a.length+1 }, (*, i) =>
 Array.from({ length: b.length+1 }, (*, j) => i===0 ? j : j===0 ? i : 0)
@@ -449,25 +449,25 @@ if (s < bestScore) { bestScore=s; best=cmd; }
 return bestScore <= 3 ? best : null;
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // HELP DATA
-// ─────────────────────────────────────────────
+// ———————————————
 const HELP = {
 balance:   { desc:‘Check your coin balance’,                              usage:’!balance’ },
 daily:     { desc:‘Claim daily coins (200 free / 500 premium)’,           usage:’!daily’ },
 history:   { desc:‘View your last 10 bets’,                              usage:’!history’ },
-coinflip:  { desc:‘Flip a coin — bet on heads or tails’,                 usage:’!coinflip <amount> <heads|tails>’ },
-bet:       { desc:‘Bet coins on a dice roll — win on 4+’,                usage:’!bet <amount>’ },
+coinflip:  { desc:‘Flip a coin – bet on heads or tails’,                 usage:’!coinflip <amount> <heads|tails>’ },
+bet:       { desc:‘Bet coins on a dice roll – win on 4+’,                usage:’!bet <amount>’ },
 dice:      { desc:‘Same as !bet’,                                         usage:’!dice <amount>’ },
 slots:     { desc:‘Spin the slot machine’,                               usage:’!slots <amount>’,    extra:‘Diamond x10 | 777 x7 | 3-match x3 | 2-match x1.5’ },
 roulette:  { desc:‘Bet on red, black, or green’,                         usage:’!roulette <amount> <red|black|green>’, extra:‘Green pays x14, others x2’ },
 blackjack: { desc:‘Play blackjack against the dealer’,                   usage:’!blackjack <amount>’, extra:‘Use the Hit / Stand buttons to play’ },
-spin:      { desc:‘Prize wheel — random multiplier’,                     usage:’!spin <amount>’ },
+spin:      { desc:‘Prize wheel – random multiplier’,                     usage:’!spin <amount>’ },
 allin:     { desc:‘Bet your entire balance (double or nothing)’,          usage:’!allin’ },
 jackpot:   { desc:‘View the jackpot pool (5% of all bets feed it)’,      usage:’!jackpot’ },
 rankcard:  { desc:‘View your rank, ELO, level, and XP’,                  usage:’!rankcard’ },
 submit:    { desc:‘Submit a clip for staff review’,                      usage:’!submit’ },
-quality:   { desc:‘Upscale a video — Free: 1 use, Premium: unlimited’,   usage:’!quality <url>’ },
+quality:   { desc:‘Upscale a video – Free: 1 use, Premium: unlimited’,   usage:’!quality <url>’ },
 code:      { desc:‘Generate a premium code (Owner only)’,                 usage:’!code’ },
 kick:      { desc:‘Kick a member from the server’,                       usage:’!kick @user [reason]’ },
 ban:       { desc:‘Permanently ban a member’,                            usage:’!ban @user [reason]’ },
@@ -482,9 +482,9 @@ help:      { desc:‘Show all commands, or details about one command’,      us
 };
 const ALL_COMMANDS = Object.keys(HELP);
 
-// ─────────────────────────────────────────────
+// ———————————————
 // DISCORD CLIENT
-// ─────────────────────────────────────────────
+// ———————————————
 const client = new Client({
 intents: [
 GatewayIntentBits.Guilds,
@@ -497,9 +497,9 @@ GatewayIntentBits.DirectMessages,
 partials: [Partials.Channel, Partials.Message],
 });
 
-// ─────────────────────────────────────────────
+// ———————————————
 // SLASH COMMANDS
-// ─────────────────────────────────────────────
+// ———————————————
 const slashDefs = [
 new SlashCommandBuilder().setName(‘submit’).setDescription(‘Submit a clip for review’),
 new SlashCommandBuilder().setName(‘profile’).setDescription(‘View your rank profile’),
@@ -516,9 +516,9 @@ log(‘SUCCESS’, ‘Slash commands registered’);
 } catch (err) { log(‘ERROR’, `Slash registration: ${err.message}`); }
 }
 
-// ─────────────────────────────────────────────
-// SAFE COMMAND RUNNER — catches all errors
-// ─────────────────────────────────────────────
+// ———————————————
+// SAFE COMMAND RUNNER – catches all errors
+// ———————————————
 async function safeRun(fn, message) {
 try { await fn(); }
 catch (err) {
@@ -527,9 +527,9 @@ try { autoDelete(await message.reply(‘Something went wrong. Please try again.�
 }
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // LEADERBOARD EMBED HELPER
-// ─────────────────────────────────────────────
+// ———————————————
 async function buildLeaderboard(page) {
 const pageSize   = 10;
 const skip       = (page - 1) * pageSize;
@@ -542,14 +542,14 @@ const medals = [’#1’,’#2’,’#3’];
 const desc = top.map((u, i) => {
 const pos = skip + i + 1;
 const label = medals[pos - 1] || `**${pos}.**`;
-return `${label} <@${u.userId}> — ELO: **${u.elo}** | ${u.rank}`;
+return `${label} <@${u.userId}> -- ELO: **${u.elo}** | ${u.rank}`;
 }).join(’\n’) || ‘No data yet.’;
 
 const embed = new EmbedBuilder()
 .setColor(0xFFD700)
 .setTitle(‘ELO Leaderboard’)
 .setDescription(desc)
-.setFooter({ text: `Page ${page}/${totalPages} — ${total} ranked players` });
+.setFooter({ text: `Page ${page}/${totalPages} -- ${total} ranked players` });
 
 const row = new ActionRowBuilder().addComponents(
 new ButtonBuilder().setCustomId(`lb_${page-1}`).setLabel(‘Prev’).setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
@@ -559,13 +559,13 @@ new ButtonBuilder().setCustomId(`lb_${page+1}`).setLabel(‘Next’).setStyle(Bu
 return { embed, row, totalPages };
 }
 
-// ─────────────────────────────────────────────
+// ———————————————
 // MESSAGE HANDLER
-// ─────────────────────────────────────────────
+// ———————————————
 client.on(‘messageCreate’, async (message) => {
 if (message.author.bot) return;
 
-// XP runs in background — never blocks command handling
+// XP runs in background – never blocks command handling
 handleXP(message).catch(() => {});
 
 if (!message.content.startsWith(CONFIG.prefix)) return;
@@ -594,7 +594,7 @@ const userId   = message.author.id;
 const userData = await getUser(userId);
 
 ```
-// ── HELP ──────────────────────────────────
+// -- HELP ----------------------------------
 if (cmd === 'help') {
   const target = args[0]?.toLowerCase();
   if (target && HELP[target]) {
@@ -607,7 +607,7 @@ if (cmd === 'help') {
       );
     return autoDelete(await message.reply({ embeds: [embed] }), 30);
   }
-  const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('GOD MODE BOT — All Commands')
+  const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('GOD MODE BOT -- All Commands')
     .addFields(
       { name: 'Economy',   value: '`!balance`  `!daily`  `!history`' },
       { name: 'Gambling',  value: '`!coinflip`  `!slots`  `!roulette`  `!blackjack`  `!dice`  `!spin`  `!bet`  `!allin`  `!jackpot`' },
@@ -620,14 +620,14 @@ if (cmd === 'help') {
   return autoDelete(await message.reply({ embeds: [embed] }), 30);
 }
 
-// ── BALANCE ───────────────────────────────
+// -- BALANCE -------------------------------
 if (cmd === 'balance') {
   const embed = new EmbedBuilder().setColor(0x00FF7F).setTitle('Balance')
     .setDescription(`${message.author} has **${userData.balance.toLocaleString()} coins**`);
   return autoDelete(await message.reply({ embeds: [embed] }));
 }
 
-// ── DAILY ─────────────────────────────────
+// -- DAILY ---------------------------------
 if (cmd === 'daily') {
   const last = userData.dailyLast ? new Date(userData.dailyLast).getTime() : 0;
   const rem  = 86_400_000 - (Date.now() - last);
@@ -640,18 +640,18 @@ if (cmd === 'daily') {
   return autoDelete(await message.reply(`Claimed **${reward} coins**! Balance: **${userData.balance + reward}**`));
 }
 
-// ── HISTORY ───────────────────────────────
+// -- HISTORY -------------------------------
 if (cmd === 'history') {
   const history = userData.betHistory || [];
   if (!history.length) return autoDelete(await message.reply('No bet history yet.'));
   const lines = [...history].reverse().map((b, i) =>
-    `**${i+1}.** \`!${b.cmd}\` — Bet **${b.bet}** → ${b.change >= 0 ? `+${b.change}` : b.change} (${b.result})`
+    `**${i+1}.** \`!${b.cmd}\` -- Bet **${b.bet}** -> ${b.change >= 0 ? `+${b.change}` : b.change} (${b.result})`
   ).join('\n');
   const embed = new EmbedBuilder().setColor(0x7289DA).setTitle('Bet History (Last 10)').setDescription(lines);
   return autoDelete(await message.reply({ embeds: [embed] }), 20);
 }
 
-// ── COINFLIP ──────────────────────────────
+// -- COINFLIP ------------------------------
 if (cmd === 'coinflip') {
   const bet  = parseInt(args[0]);
   const side = args[1]?.toLowerCase();
@@ -664,10 +664,10 @@ if (cmd === 'coinflip') {
   await updateUser(userId, { balance: newBal });
   await addToJackpot(bet);
   await recordBet(userId, 'coinflip', bet, result, change);
-  return autoDelete(await message.reply(`**${result.toUpperCase()}** — ${won ? `Won +${bet}` : `Lost -${bet}`}! Balance: **${newBal}**`));
+  return autoDelete(await message.reply(`**${result.toUpperCase()}** -- ${won ? `Won +${bet}` : `Lost -${bet}`}! Balance: **${newBal}**`));
 }
 
-// ── BET / DICE ────────────────────────────
+// -- BET / DICE ----------------------------
 if (cmd === 'bet' || cmd === 'dice') {
   const bet = parseInt(args[0]);
   if (!bet || bet <= 0 || bet > userData.balance) return autoDelete(await message.reply('Invalid bet amount.'));
@@ -678,10 +678,10 @@ if (cmd === 'bet' || cmd === 'dice') {
   await updateUser(userId, { balance: newBal });
   await addToJackpot(bet);
   await recordBet(userId, cmd, bet, `rolled ${roll}`, change);
-  return autoDelete(await message.reply(`Rolled **${roll}** — ${won ? `Won +${bet}` : `Lost -${bet}`}! Balance: **${newBal}**`));
+  return autoDelete(await message.reply(`Rolled **${roll}** -- ${won ? `Won +${bet}` : `Lost -${bet}`}! Balance: **${newBal}**`));
 }
 
-// ── SLOTS ─────────────────────────────────
+// -- SLOTS ---------------------------------
 if (cmd === 'slots') {
   const bet = parseInt(args[0]);
   if (!bet || bet <= 0 || bet > userData.balance) return autoDelete(await message.reply('Invalid bet amount.'));
@@ -706,7 +706,7 @@ if (cmd === 'slots') {
   return autoDelete(await message.reply(`**[ ${reels.join(' ')} ]**\n${msg}\n${gain >= 0 ? `+${gain}` : gain} coins! Balance: **${newBal}**`));
 }
 
-// ── ROULETTE ──────────────────────────────
+// -- ROULETTE ------------------------------
 if (cmd === 'roulette') {
   const bet    = parseInt(args[0]);
   const choice = args[1]?.toLowerCase();
@@ -721,10 +721,10 @@ if (cmd === 'roulette') {
   await updateUser(userId, { balance: newBal });
   await addToJackpot(bet);
   await recordBet(userId, 'roulette', bet, result, change);
-  return autoDelete(await message.reply(`**${result.toUpperCase()} (${roll})** — ${won ? `Won +${change}` : `Lost ${bet}`} coins! Balance: **${newBal}**`));
+  return autoDelete(await message.reply(`**${result.toUpperCase()} (${roll})** -- ${won ? `Won +${change}` : `Lost ${bet}`} coins! Balance: **${newBal}**`));
 }
 
-// ── BLACKJACK ─────────────────────────────
+// -- BLACKJACK -----------------------------
 if (cmd === 'blackjack') {
   const bet = parseInt(args[0]);
   if (!bet || bet <= 0 || bet > userData.balance) return autoDelete(await message.reply('Invalid bet amount.'));
@@ -744,7 +744,7 @@ if (cmd === 'blackjack') {
   return autoDelete(await message.reply({ embeds: [embed], components: [row] }), 60);
 }
 
-// ── ALLIN ─────────────────────────────────
+// -- ALLIN ---------------------------------
 if (cmd === 'allin') {
   const bet = userData.balance;
   if (bet <= 0) return autoDelete(await message.reply('You have no coins to bet!'));
@@ -754,10 +754,10 @@ if (cmd === 'allin') {
   await updateUser(userId, { balance: newBal });
   await addToJackpot(bet);
   await recordBet(userId, 'allin', bet, won ? 'won' : 'lost', change);
-  return autoDelete(await message.reply(`ALL IN — **${won ? `WON! +${bet} coins!` : 'LOST EVERYTHING'}** | Balance: **${newBal}**`));
+  return autoDelete(await message.reply(`ALL IN -- **${won ? `WON! +${bet} coins!` : 'LOST EVERYTHING'}** | Balance: **${newBal}**`));
 }
 
-// ── SPIN ──────────────────────────────────
+// -- SPIN ----------------------------------
 if (cmd === 'spin') {
   const bet  = parseInt(args[0]);
   if (!bet || bet <= 0 || bet > userData.balance) return autoDelete(await message.reply('Invalid bet amount.'));
@@ -767,10 +767,10 @@ if (cmd === 'spin') {
   await updateUser(userId, { balance: newBal });
   await addToJackpot(bet);
   await recordBet(userId, 'spin', bet, `${mult}x`, change);
-  return autoDelete(await message.reply(`**${mult}x multiplier** — ${change >= 0 ? `+${change}` : change} coins! Balance: **${newBal}**`));
+  return autoDelete(await message.reply(`**${mult}x multiplier** -- ${change >= 0 ? `+${change}` : change} coins! Balance: **${newBal}**`));
 }
 
-// ── JACKPOT ───────────────────────────────
+// -- JACKPOT -------------------------------
 if (cmd === 'jackpot') {
   const pool  = await getJackpot();
   const embed = new EmbedBuilder().setColor(0xFFD700).setTitle('Current Jackpot Pool')
@@ -778,7 +778,7 @@ if (cmd === 'jackpot') {
   return autoDelete(await message.reply({ embeds: [embed] }));
 }
 
-// ── RANKCARD ──────────────────────────────
+// -- RANKCARD ------------------------------
 if (cmd === 'rankcard') {
   const embed = new EmbedBuilder().setColor(0x7289DA).setTitle(message.author.username)
     .setThumbnail(message.author.displayAvatarURL())
@@ -794,12 +794,12 @@ if (cmd === 'rankcard') {
   return autoDelete(await message.reply({ embeds: [embed] }), 30);
 }
 
-// ── SUBMIT ────────────────────────────────
+// -- SUBMIT --------------------------------
 if (cmd === 'submit') {
   return autoDelete(await message.reply('Use the `/submit` slash command to open the clip submission form!'));
 }
 
-// ── QUALITY ───────────────────────────────
+// -- QUALITY -------------------------------
 if (cmd === 'quality') {
   const limit = userData.premium ? Infinity : 1;
   if ((userData.qualityUses || 0) >= limit)
@@ -810,7 +810,7 @@ if (cmd === 'quality') {
   return autoDelete(await message.reply('Processing... your upscaled video will be sent to your DMs. (Connect ffmpeg to enable real upscaling)'));
 }
 
-// ── OWNER: CODE ───────────────────────────
+// -- OWNER: CODE ---------------------------
 if (cmd === 'code') {
   if (!CONFIG.ownerIds.includes(userId)) return autoDelete(await message.reply('Owner only.'));
   const code = `PREM-${Math.random().toString(36).slice(2,10).toUpperCase()}`;
@@ -819,7 +819,7 @@ if (cmd === 'code') {
   return autoDelete(await message.reply('Code generated and sent to your DMs.'));
 }
 
-// ── MODERATION ────────────────────────────
+// -- MODERATION ----------------------------
 if (['kick','ban','mute','unmute','warn','clear','lock','unlock','slowmode'].includes(cmd)) {
   if (!message.member.permissions.has(PermissionFlagsBits.ManageMessages))
     return autoDelete(await message.reply('You do not have permission to use this command.'));
@@ -831,13 +831,13 @@ if (['kick','ban','mute','unmute','warn','clear','lock','unlock','slowmode'].inc
     if (!target) return autoDelete(await message.reply('Mention a user to kick.'));
     await target.kick(reason);
     await modLog(message.guild, 'KICK', message.author, target, reason);
-    return autoDelete(await message.reply(`Kicked **${target.user.tag}** — ${reason}`));
+    return autoDelete(await message.reply(`Kicked **${target.user.tag}** -- ${reason}`));
   }
   if (cmd === 'ban') {
     if (!target) return autoDelete(await message.reply('Mention a user to ban.'));
     await target.ban({ reason });
     await modLog(message.guild, 'BAN', message.author, target, reason);
-    return autoDelete(await message.reply(`Banned **${target.user.tag}** — ${reason}`));
+    return autoDelete(await message.reply(`Banned **${target.user.tag}** -- ${reason}`));
   }
   if (cmd === 'mute') {
     if (!target) return autoDelete(await message.reply('Mention a user to mute.'));
@@ -857,7 +857,7 @@ if (['kick','ban','mute','unmute','warn','clear','lock','unlock','slowmode'].inc
     const warns = [...(td.warns || []), { reason, by: userId, date: new Date() }];
     await updateUser(target.id, { warns });
     await modLog(message.guild, 'WARN', message.author, target, reason);
-    return autoDelete(await message.reply(`Warned **${target.user.tag}** (${warns.length} total warns) — ${reason}`));
+    return autoDelete(await message.reply(`Warned **${target.user.tag}** (${warns.length} total warns) -- ${reason}`));
   }
   if (cmd === 'clear') {
     const amount  = Math.min(parseInt(args[0]) || 10, 100);
@@ -887,9 +887,9 @@ if (['kick','ban','mute','unmute','warn','clear','lock','unlock','slowmode'].inc
 }, message);
 });
 
-// ─────────────────────────────────────────────
+// ———————————————
 // INTERACTION HANDLER
-// ─────────────────────────────────────────────
+// ———————————————
 client.on(‘interactionCreate’, async (interaction) => {
 try {
 
@@ -907,7 +907,7 @@ if (interaction.isButton() && ['bj_hit','bj_stand'].includes(interaction.customI
       bjGames.delete(interaction.user.id);
       await updateUser(interaction.user.id, { balance: Math.max(0, userData.balance - game.bet) });
       await recordBet(interaction.user.id, 'blackjack', game.bet, 'bust', -game.bet);
-      return interaction.update({ content: `Bust at **${total}** — Lost **${game.bet}** coins.`, embeds: [], components: [] });
+      return interaction.update({ content: `Bust at **${total}** -- Lost **${game.bet}** coins.`, embeds: [], components: [] });
     }
     return interaction.update({
       embeds: [new EmbedBuilder().setColor(0x1A1A2E).setTitle('Blackjack')
@@ -929,7 +929,7 @@ if (interaction.isButton() && ['bj_hit','bj_stand'].includes(interaction.customI
     await updateUser(interaction.user.id, { balance: Math.max(0, userData.balance + change) });
     await recordBet(interaction.user.id, 'blackjack', game.bet, push ? 'push' : won ? 'win' : 'loss', change);
     return interaction.update({
-      content: `Dealer: **${dt}** | You: **${pt}** — ${push ? 'Tie!' : won ? `Won +${game.bet} coins!` : `Lost ${game.bet} coins.`}`,
+      content: `Dealer: **${dt}** | You: **${pt}** -- ${push ? 'Tie!' : won ? `Won +${game.bet} coins!` : `Lost ${game.bet} coins.`}`,
       embeds: [], components: []
     });
   }
@@ -964,7 +964,7 @@ if (interaction.isButton() && interaction.customId.startsWith('rate_')) {
     if (member) await applyRank(guild, member, newElo);
   }
 
-  return interaction.reply({ content: `Rated **${rating}** — +${eloGain} ELO to <@${sub.userId}>. New rank: **${newRank}**`, ephemeral: true });
+  return interaction.reply({ content: `Rated **${rating}** -- +${eloGain} ELO to <@${sub.userId}>. New rank: **${newRank}**`, ephemeral: true });
 }
 
 // Leaderboard pagination buttons
@@ -981,7 +981,7 @@ if (interaction.isChatInputCommand()) {
 
   if (interaction.commandName === 'profile') {
     const embed = new EmbedBuilder().setColor(0x7289DA)
-      .setTitle(`Profile — ${interaction.user.username}`)
+      .setTitle(`Profile -- ${interaction.user.username}`)
       .setThumbnail(interaction.user.displayAvatarURL())
       .addFields(
         { name: 'Rank',    value: userData.rank || 'Unranked',                inline: true },
@@ -1073,9 +1073,9 @@ else await interaction.reply(msg);
 }
 });
 
-// ─────────────────────────────────────────────
+// ———————————————
 // BOOST DETECTION
-// ─────────────────────────────────────────────
+// ———————————————
 client.on(‘guildMemberUpdate’, async (oldMember, newMember) => {
 try {
 const wasBoosting = !!oldMember.premiumSince;
@@ -1087,22 +1087,22 @@ if (!wasBoosting && isBoosting) {
   await db.collection('codes').insertOne({ code, userId: newMember.id, used: false, type: 'boost', createdAt: new Date() });
   await updateUser(newMember.id, { premium: true });
   await newMember.send(`Thank you for boosting! Your premium code: \`${code}\``).catch(() => {});
-  log('INFO', `${newMember.user.tag} boosted — premium activated`);
+  log('INFO', `${newMember.user.tag} boosted -- premium activated`);
 }
 
 if (wasBoosting && !isBoosting) {
   await updateUser(newMember.id, { premium: false });
   await newMember.send('Your boost ended. Premium access has been removed.').catch(() => {});
-  log('INFO', `${newMember.user.tag} boost removed — premium revoked`);
+  log('INFO', `${newMember.user.tag} boost removed -- premium revoked`);
 }
 ```
 
 } catch (err) { log(‘ERROR’, `guildMemberUpdate: ${err.message}`); }
 });
 
-// ─────────────────────────────────────────────
+// ———————————————
 // EXPRESS API
-// ─────────────────────────────────────────────
+// ———————————————
 let apiRequests = 0;
 const startTime = Date.now();
 
@@ -1149,15 +1149,15 @@ res.json(subs);
 } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ─────────────────────────────────────────────
+// ———————————————
 // GLOBAL SAFETY NET
-// ─────────────────────────────────────────────
+// ———————————————
 process.on(‘unhandledRejection’, (err) => log(‘ERROR’, `Unhandled rejection: ${err?.message || err}`));
 process.on(‘uncaughtException’,  (err) => log(‘ERROR’, `Uncaught exception: ${err?.message || err}`));
 
-// ─────────────────────────────────────────────
+// ———————————————
 // LAUNCH
-// ─────────────────────────────────────────────
+// ———————————————
 (async () => {
 try {
 await bootSequence();
@@ -1166,7 +1166,7 @@ await registerSlash();
 app.listen(CONFIG.port, () => log(‘SUCCESS’, `API running on port ${CONFIG.port}`));
 await client.login(CONFIG.token);
 client.once(‘ready’, async () => {
-log(‘SUCCESS’, `${client.user.tag} ONLINE — ${client.guilds.cache.size} guild(s)`);
+log(‘SUCCESS’, `${client.user.tag} ONLINE -- ${client.guilds.cache.size} guild(s)`);
 
 ```
   // Auto-detect roles and channels for every guild the bot is in
