@@ -1,22 +1,19 @@
 {
-  "name": "voidless-powerhouse",
-  "version": "3.0.0",
-  "description": "High-performance AI Video Upscaling & Ranking Bot",
-  "main": "index.js",
+  "name": "god-mode-discord-bot",
+  "version": "1.0.0",
+  "description": "Full Discord bot platform — Ranks, Economy, Gambling, Moderation, Dashboard",
+  "main": "main.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node main.js",
+    "dev": "nodemon main.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.450.0",
-    "axios": "^1.6.0",
-    "colors": "^1.4.0",
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5",
-    "express": "^4.18.2",
-    "mongoose": "^8.2.0",
-    "nanoid": "^3.3.7",
-    "p-queue": "^6.6.2"
+    "discord.js": "^14.15.3",
+    "mongodb": "^6.7.0",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
   },
   "engines": {
     "node": ">=18.0.0"
