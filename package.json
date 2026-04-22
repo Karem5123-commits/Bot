@@ -1,21 +1,37 @@
 {
-  "name": "god-mode-discord-bot",
-  "version": "1.0.0",
-  "description": "Full Discord bot platform — Ranks, Economy, Gambling, Moderation, Dashboard",
+  "name": "god-mode-bot-v3",
+  "version": "3.0.0",
+  "description": "GOD MODE BOT v3 - Fully merged single-file Discord bot with Economy, Gambling, Ranks, Tickets, Verification, Giveaways, Suggestions, Snipe, Video Processing, and Dashboard",
   "main": "main.js",
   "scripts": {
     "start": "node main.js",
-    "dev": "nodemon main.js"
+    "dev": "node --watch main.js",
+    "lint": "eslint main.js",
+    "test": "echo \"No tests configured\" && exit 0"
   },
-  "dependencies": {
-    "discord.js": "^14.15.3",
-    "mongodb": "^6.7.0",
-    "express": "^4.19.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.4"
-  },
+  "keywords": [
+    "discord",
+    "bot",
+    "economy",
+    "gambling",
+    "moderation",
+    "tickets",
+    "giveaways",
+    "verification",
+    "ranks",
+    "dashboard"
+  ],
+  "author": "GOD MODE",
+  "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "express": "^4.21.1",
+    "mongodb": "^6.11.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.14.0"
   }
 }
