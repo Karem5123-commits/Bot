@@ -301,4 +301,87 @@ const interactionRouter = {
             if (!isOwnerLocal) return interaction.reply({ content: '👑 Owner only.', ephemeral: true });
             await interaction.deferReply({ ephemeral: true });
             const result = await assignAutoRoleToAll(guild);
-            return interaction.editReply(`✅ Sync complete: **${result.assigned}** assigned, **${result.skipped}** skipped, **
+            return interaction.editReply(`✅ Sync complete: **${result.assigned}** assigned, **${result.skipped}** skipped, **${result.failed}** failed.`);
+          }
+          default: break;
+        }
+      }
+      
+      // --- LB PAGINATION ---
+      if (interaction.customId.startsWith('lb_')) {
+        const [, type, pg] = interaction.customId.split('_');
+        const page = parseInt(pg);
+        if (page < 1) return interaction.reply({ content: '📄 Already at first page.', ephemeral: true });
+        
+        const limit = 10;
+        const skip = (page - 1) * limit;
+        const sort = type === 'balance' ? 'balance' : type === 'winrate' ? 'wins' : 'elo';
+        const total = await db.collection('users').countDocuments({ [sort]: { $gt: 0 } });
+        const totalPages = Math.max(1, Math.ceil(total / limit));
+        
+        const top = await db.collection('users').find({ [sort]: { $gt: 0 } }).sort({ [sort]: -1, elo: -1 }).skip(skip).limit(limit).toArray();
+        const medals = ['🥇','🥈','🥉'];
+        const lines = top.map((u, i) => {
+          const pos = skip + i + 1;
+          const val = type === 'balance' ? `${u.balance.toLocaleString()} 🪙` : type === 'winrate' ? `${u.wins || 0}W / ${u.losses || 0}L` : `${u.elo} ELO (${u.rank})`;
+          return `${medals[i] || `**${pos}.**`} <@${u.userId}> — ${val}`;
+        });
+        const embed = new EmbedBuilder().setColor(0xFFD700).setTitle(`🏆 ${type.toUpperCase()} Leaderboard`).setDescription(lines.join('\n') || 'No data.').setFooter({ text: `Page ${page}/${totalPages} — ${total} players` });
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`lb_${type}_${page-1}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),
+          new ButtonBuilder().setCustomId(`lb_${type}_${page+1}`).setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages)
+        );
+        return interaction.update({ embeds: [embed], components: [row] });
+      }
+      
+      // --- MODAL SUBMISSIONS ---
+      if (interaction.isModalSubmit() && interaction.customId === 'submit_modal') {
+        const url = interaction.fields.getTextInputValue('clip_url');
+        const desc = interaction.fields.getTextInputValue('clip_desc') || 'No description';
+        const ins = await db.collection('submissions').insertOne({
+          userId, url, description: desc, reviewed: false, submittedAt: new Date(), guildId: guild.id
+        });
+        const reviewCh = guild.channels.cache.get(CONFIG.reviewChannelId);
+        if (reviewCh) {
+          const embed = new EmbedBuilder().setColor(0xFFD700).setTitle('📨 New Clip').addFields({ name: 'User', value: `<@${userId}>` }, { name: 'URL', value: url });
+          const row = new ActionRowBuilder().addComponents(['A','S','SS','SSS'].map(r =>
+            new ButtonBuilder().setCustomId(`rate_${ins.insertedId}_${r}`).setLabel(r).setStyle(ButtonStyle.Primary)
+          ));
+          await reviewCh.send({ embeds: [embed], components: [row] });
+        }
+        return interaction.reply({ content: '✅ Submitted for cinematic review!', ephemeral: true });
+      }
+      
+    } catch (err) {
+      log.error('Interaction Failure', { err: err.message, stack: err.stack, customId: interaction.customId });
+      if (!interaction.replied && !interaction.deferred) {
+        try { await interaction.reply({ content: '⚠️ An unexpected error occurred. Staff notified.', ephemeral: true }); } catch {}
+      }
+    }
+  },
+  
+  _renderBJ(interaction, game, footer = 'Hit to draw, Stand to hold, Double to double-down') {
+    const pt = handTotal(game.playerHand);
+    const embed = new EmbedBuilder().setColor(0x1A1A2E).setTitle('🃏 Blackjack')
+      .addFields({ name: 'Your Hand', value: `${game.playerHand.join(' ')} (${pt})`, inline: true }, { name: 'Dealer', value: `${game.dealerHand[0]} [hidden]`, inline: true });
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId('bj_hit').setLabel('Hit').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('bj_stand').setLabel('Stand').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('bj_double').setLabel(`Double (${game.bet*2})`).setStyle(ButtonStyle.Danger)
+    );
+    return interaction.update({ embeds: [embed], components: [row], footer: { text: footer } });
+  },
+  
+  async _resolveBJ(interaction, game, userData, change, outcome) {
+    bjGames.delete(interaction.user.id);
+    await updateUser(interaction.user.id, { balance: Math.max(0, userData.balance + change) });
+    await recordBet(interaction.user.id, 'blackjack', game.bet, outcome, change);
+    const pt = handTotal(game.playerHand);
+    return interaction.update({
+      content: `💥 ${outcome.toUpperCase()} at **${pt}** — ${change > 0 ? `+${change}` : `${change}`}`,
+      embeds: [], components: []
+    });
+  }
+};
+
+module.exports = interactionRouter;
