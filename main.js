@@ -1,1631 +1,1397 @@
 'use strict';
 // =============================================================
-// GOD MODE BOT v5 — ULTRA EDITION (100x POWER)
-// Economy • Gambling • Ranks • Admin Panel • API • Submissions
+// GOD MODE BOT v8 — INFINITY EDITION
+// Core Engine: DI Container, Tiered Cache, Circuit Breakers,
+// Cinematic Video Processor, Mongo Transactions, Metrics, Health
 // =============================================================
 
 const {
-  Client, GatewayIntentBits, Partials, EmbedBuilder,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle,
-  ModalBuilder, TextInputBuilder, TextInputStyle,
-  SlashCommandBuilder, REST, Routes, PermissionFlagsBits,
-  ChannelType, ActivityType, StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder, ComponentType,
+    Client, GatewayIntentBits, Partials, ActivityType, EmbedBuilder,
+    ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder,
+    TextInputBuilder, TextInputStyle, REST, Routes,
+    PermissionFlagsBits, ChannelType, Colors
 } = require('discord.js');
+
 const { MongoClient, ObjectId } = require('mongodb');
 const express = require('express');
 const { exec } = require('child_process');
 const fs = require('fs').promises;
-const fsSync = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 const crypto = require('crypto');
+const http = require('http');
+const WebSocket = require('ws');
+
+EventEmitter.defaultMaxListeners = 100;
 
 // =============================================================
-// CONFIG
+// ENVIRONMENT VALIDATION
 // =============================================================
+const REQUIRED_ENV = ['DISCORD_TOKEN', 'CLIENT_ID', 'MONGO_URI'];
+const missingEnv = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missingEnv.length > 0) {
+    console.error(`[FATAL] Missing env vars:\n  ${missingEnv.join('\n  ')}`);
+    process.exit(1);
+}
+
 const CONFIG = {
-  token:           process.env.DISCORD_TOKEN,
-  clientId:        process.env.CLIENT_ID,
-  mongoUri:        process.env.MONGO_URI,
-  dbName:          'godbot',
-  prefix:          '!',
-  reviewChannelId: process.env.REVIEW_CHANNEL_ID || '',
-  logChannelId:    '',
-  ownerIds:        (process.env.OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
-  port:            parseInt(process.env.PORT) || 3000,
-  autoDeleteSeconds: 10,
-  jackpotCut:      0.05,
-  rankRoles:       {},
-  autoRoleId:      '1491561811516981368',
-  adminPassword:   process.env.ADMIN_PASSWORD || 'xeporisblack',
-  jwtSecret:       process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex'),
-  disabledCommands: new Set(),
-  maxBet:          50000,
-  minBet:          10,
-  dailyAmount:     500,
-  dailyStreakBonus: 100,
+    token: process.env.DISCORD_TOKEN,
+    clientId: process.env.CLIENT_ID,
+    mongoUri: process.env.MONGO_URI,
+    dbName: process.env.MONGO_DB || 'godbot_v8',
+    prefix: process.env.BOT_PREFIX || '!',
+    port: parseInt(process.env.PORT) || 3000,
+    ownerIds: (process.env.OWNER_IDS || '').split(',').map(s => s.trim()).filter(Boolean),
+    adminPassword: process.env.ADMIN_PASSWORD || crypto.randomBytes(16).toString('hex'),
+    jwtSecret: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+    reviewChannelId: process.env.REVIEW_CHANNEL_ID || '',
+    logChannelId: process.env.LOG_CHANNEL_ID || '',
+    autoRoleId: process.env.AUTO_ROLE_ID || '',
+    autoDeleteSeconds: parseInt(process.env.AUTO_DELETE_SECS) || 10,
+    maxBulkDelete: 200,
+    cacheSize: 5000,
+    cacheTTL: 120000,
+    rateLimitWindow: 60000,
+    workerConcurrency: parseInt(process.env.WORKER_CONCURRENCY) || 2,
+    minBet: 1,
+    maxBet: 500000,
+    dailyAmount: 500,
+    dailyStreakBonus: 100,
+    jackpotCut: 0.05,
+    disabledCommands: new Set(),
+    videoPresets: {
+        fast: { crf: 20, preset: 'fast', tune: 'fastdecode' },
+        balanced: { crf: 18, preset: 'medium', tune: 'film' },
+        quality: { crf: 16, preset: 'slow', tune: 'grain' },
+        lossless: { crf: 14, preset: 'veryslow', tune: 'grain' }
+    }
 };
 
 // =============================================================
-// LOGGER — Enhanced with file output
+// INFRASTRUCTURE CLASSES
 // =============================================================
-const logBuffer = [];
-
-function log(level, ...rest) {
-  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const icons = {
-    INFO: '[INFO]', WARN: '[WARN]', ERROR: '[ERR ]',
-    SUCCESS: '[OK  ]', ADMIN: '[ADMN]', API: '[API ]',
-  };
-  const icon = icons[level] || `[${level}]`;
-  const line = `[${ts}] ${icon} ${rest.join(' ')}`;
-  console.log(line);
-  logBuffer.push({ ts, level, message: rest.join(' ') });
-  if (logBuffer.length > 1000) logBuffer.shift();
-}
-
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-// =============================================================
-// BOOT SEQUENCE
-// =============================================================
-async function bootSequence() {
-  console.clear();
-  const banner = [
-    '╔══════════════════════════════════════════════════════════╗',
-    '║   GOD MODE BOT v5  —  ULTRA EDITION  (100x POWER)       ║',
-    '║   Economy  Gambling  Ranks  Admin Panel  API  Submit     ║',
-    '╚══════════════════════════════════════════════════════════╝',
-  ];
-  banner.forEach(l => console.log(l));
-
-  const systems = [
-    'DATABASE ENGINE',    'CACHE LAYER',       'RATE LIMITER',
-    'RANK ENGINE',        'ELO CALCULATOR',    'ECONOMY SYSTEM',
-    'GAMBLING ENGINE',    'TICKET SYSTEM',     'VERIFICATION',
-    'VIDEO PROCESSOR',    'ADMIN PANEL',       'API GATEWAY',
-    'WEBSOCKET SERVER',   'COMMAND TOGGLES',   'AUTO-ROLE ENGINE',
-    'ANALYTICS TRACKER',  'SLASH PURGE',       'SUBMIT SYSTEM',
-    'GIVEAWAY ENGINE',    'AUDIT LOGGER',      'DISCORD GATEWAY',
-  ];
-
-  for (const s of systems) {
-    await sleep(40);
-    console.log(`  [v] ${s}`);
-  }
-  console.log('\n  >> ALL SYSTEMS ONLINE — POWER LEVEL: 100x\n');
-}
-
-// =============================================================
-// DATABASE
-// =============================================================
-let db, mongoClient;
-
-async function connectDB() {
-  mongoClient = new MongoClient(CONFIG.mongoUri, {
-    serverSelectionTimeoutMS: 8000,
-    connectTimeoutMS: 10000,
-    maxPoolSize: 20,
-  });
-
-  const tryConnect = async (attempt = 1) => {
-    try {
-      await mongoClient.connect();
-      db = mongoClient.db(CONFIG.dbName);
-
-      // Create all indexes in parallel
-      await Promise.all([
-        db.collection('users').createIndex({ userId: 1 }, { unique: true }),
-        db.collection('users').createIndex({ elo: -1 }),
-        db.collection('users').createIndex({ balance: -1 }),
-        db.collection('users').createIndex({ level: -1 }),
-        db.collection('submissions').createIndex({ reviewed: 1 }),
-        db.collection('submissions').createIndex({ submittedAt: -1 }),
-        db.collection('submissions').createIndex({ userId: 1 }),
-        db.collection('submissions').createIndex({ status: 1 }),
-        db.collection('giveaways').createIndex({ endsAt: 1 }),
-        db.collection('giveaways').createIndex({ ended: 1 }),
-        db.collection('analytics').createIndex({ timestamp: -1 }),
-        db.collection('analytics').createIndex({ type: 1 }),
-        db.collection('command_logs').createIndex({ timestamp: -1 }),
-        db.collection('command_logs').createIndex({ userId: 1 }),
-        db.collection('settings').createIndex({ key: 1 }, { unique: true }),
-        db.collection('audit').createIndex({ timestamp: -1 }),
-        db.collection('audit').createIndex({ guildId: 1 }),
-        db.collection('tickets').createIndex({ channelId: 1 }, { unique: true }),
-        db.collection('tickets').createIndex({ userId: 1 }),
-        db.collection('warnings').createIndex({ userId: 1 }),
-        db.collection('warnings').createIndex({ guildId: 1 }),
-      ]);
-
-      log('SUCCESS', 'MongoDB connected — all indexes ready');
-
-      // Load persisted settings
-      const [disabledCmds, savedConfig] = await Promise.all([
-        db.collection('settings').findOne({ key: 'disabled_commands' }),
-        db.collection('settings').findOne({ key: 'bot_config' }),
-      ]);
-
-      if (disabledCmds?.value) {
-        CONFIG.disabledCommands = new Set(disabledCmds.value);
-        log('INFO', `Loaded ${CONFIG.disabledCommands.size} disabled commands`);
-      }
-      if (savedConfig?.value) {
-        Object.assign(CONFIG, savedConfig.value);
-        log('INFO', 'Loaded persisted bot config');
-      }
-    } catch (err) {
-      log('ERROR', `MongoDB attempt ${attempt}: ${err.message}`);
-      if (attempt < 5) { await sleep(attempt * 2000); return tryConnect(attempt + 1); }
-      throw new Error('MongoDB failed after 5 attempts — check MONGO_URI');
+class AsyncQueue {
+    constructor(concurrency = 2) {
+        this.concurrency = concurrency;
+        this.running = 0;
+        this.queue = [];
+        this.results = new Map();
     }
-  };
-
-  await tryConnect();
-}
-
-// =============================================================
-// ANALYTICS
-// =============================================================
-async function trackEvent(type, data = {}) {
-  try {
-    await db.collection('analytics').insertOne({ type, data, timestamp: new Date() });
-  } catch { /* non-critical */ }
-}
-
-async function logCommand(userId, command, args, success, guildId) {
-  try {
-    await db.collection('command_logs').insertOne({
-      userId, command, args: args.slice(0, 10), success, guildId, timestamp: new Date(),
-    });
-  } catch { /* non-critical */ }
-}
-
-// =============================================================
-// CACHE LAYER
-// =============================================================
-const userCache  = new Map();
-const CACHE_TTL  = 60_000;
-const guildCache = new Map();
-
-function getCached(userId) {
-  const e = userCache.get(userId);
-  if (!e) return null;
-  if (Date.now() - e.cachedAt > CACHE_TTL) { userCache.delete(userId); return null; }
-  return e.data;
-}
-function setCache(userId, data)    { userCache.set(userId, { data, cachedAt: Date.now() }); }
-function invalidateCache(userId)   { userCache.delete(userId); }
-
-// =============================================================
-// USER MANAGEMENT
-// =============================================================
-const DEFAULT_USER = () => ({
-  xp: 0, level: 1, elo: 1000, peakElo: 1000,
-  rank: 'Bronze', streak: 0, wins: 0, losses: 0,
-  balance: 1000, premium: false, dailyLast: null, dailyStreak: 0,
-  submissions: 0, warns: [], qualityUses: 0, betHistory: [],
-  totalWagered: 0, totalWon: 0, totalLost: 0,
-  joinedAt: new Date(), inventory: [], achievements: [],
-  lastSeen: new Date(),
-});
-
-async function getUser(userId) {
-  const cached = getCached(userId);
-  if (cached) return cached;
-  try {
-    let user = await db.collection('users').findOne({ userId });
-    if (!user) {
-      user = { userId, ...DEFAULT_USER() };
-      await db.collection('users').insertOne(user);
-      await trackEvent('user_created', { userId });
+    async enqueue(id, fn) {
+        return new Promise((resolve, reject) => {
+            this.queue.push({ id, fn, resolve, reject });
+            this._next();
+        });
     }
-    setCache(userId, user);
-    return user;
-  } catch (err) {
-    log('ERROR', `getUser ${userId}: ${err.message}`);
-    throw err;
-  }
-}
-
-async function updateUser(userId, update) {
-  try {
-    const ts = { lastSeen: new Date() };
-    await db.collection('users').updateOne(
-      { userId },
-      { $set: { ...update, ...ts } },
-      { upsert: true }
-    );
-    const cached = getCached(userId);
-    if (cached) setCache(userId, { ...cached, ...update });
-  } catch (err) {
-    log('ERROR', `updateUser ${userId}: ${err.message}`);
-    throw err;
-  }
-}
-
-async function addBalance(userId, amount) {
-  try {
-    const result = await db.collection('users').findOneAndUpdate(
-      { userId },
-      { $inc: { balance: amount }, $set: { lastSeen: new Date() } },
-      { returnDocument: 'after', upsert: true }
-    );
-    invalidateCache(userId);
-    return result.balance;
-  } catch (err) {
-    log('ERROR', `addBalance ${userId}: ${err.message}`);
-    throw err;
-  }
-}
-
-// =============================================================
-// RANK SYSTEM
-// =============================================================
-const RANKS = [
-  { name: 'Bronze',   elo: 0,    color: 0xCD7F32 },
-  { name: 'Silver',   elo: 1200, color: 0xC0C0C0 },
-  { name: 'Gold',     elo: 1800, color: 0xFFD700 },
-  { name: 'Platinum', elo: 2500, color: 0x00BCD4 },
-  { name: 'Diamond',  elo: 3500, color: 0x3498DB },
-  { name: 'Master',   elo: 4800, color: 0x9B59B6 },
-  { name: 'Legend',   elo: 6500, color: 0xE74C3C },
-];
-
-function getRankFromElo(elo) {
-  let rank = RANKS[0];
-  for (const r of RANKS) if (elo >= r.elo) rank = r;
-  return rank;
-}
-
-function calcElo(rating, currentElo, streak) {
-  const scoreMap = { A: 6, S: 7.5, SS: 9, SSS: 10 };
-  const score = scoreMap[rating] || 6;
-  let gain = (score - 5.5) * 50;
-  if (streak >= 3) gain *= 1.5;
-  if (streak >= 5) gain *= 1.8;
-  if (currentElo > 3500) gain *= 0.7;
-  if (currentElo > 5000) gain *= 0.5;
-  return Math.round(gain);
-}
-
-const guildRankRoles = new Map();
-
-async function applyRank(guild, member, elo) {
-  const rankObj = getRankFromElo(elo);
-  const roles = guildRankRoles.get(guild.id) || CONFIG.rankRoles;
-  try {
-    const removePromises = [];
-    for (const key in roles) {
-      if (member.roles.cache.has(roles[key])) {
-        removePromises.push(member.roles.remove(roles[key]).catch(() => {}));
-      }
+    _next() {
+        if (this.running >= this.concurrency || !this.queue.length) return;
+        this.running++;
+        const { id, fn, resolve, reject } = this.queue.shift();
+        const start = Date.now();
+        Promise.resolve(fn())
+            .then(v => { this.results.set(id, { result: v, time: Date.now() - start }); resolve(v); })
+            .catch(e => { this.results.set(id, { error: e.message, time: Date.now() - start }); reject(e); })
+            .finally(() => { this.running--; setTimeout(() => this._next(), 0); });
     }
-    await Promise.all(removePromises);
-    const newRoleId = roles[rankObj.name];
-    if (newRoleId) await member.roles.add(newRoleId).catch(() => {});
-  } catch (err) {
-    log('WARN', `applyRank ${member.id}: ${err.message}`);
-  }
-  return rankObj.name;
+    stats() { return { running: this.running, queued: this.queue.length, processed: this.results.size }; }
 }
 
-// =============================================================
-// AUTO-ROLE
-// =============================================================
-async function assignAutoRoleToAll(guild) {
-  try {
-    const role = guild.roles.cache.get(CONFIG.autoRoleId);
-    if (!role) {
-      log('WARN', `Auto-role ${CONFIG.autoRoleId} not found in "${guild.name}"`);
-      return { assigned: 0, skipped: 0, failed: 0 };
+class CircuitBreaker {
+    constructor(threshold = 5, timeout = 30000) {
+        this.threshold = threshold;
+        this.timeout = timeout;
+        this.failures = 0;
+        this.state = 'CLOSED';
+        this.lastFailure = 0;
     }
-    const members = await guild.members.fetch();
-    let assigned = 0, skipped = 0, failed = 0;
-    const batch = [];
-
-    for (const member of members.values()) {
-      if (member.user.bot || member.roles.cache.has(role.id)) { skipped++; continue; }
-      batch.push(
-        member.roles.add(role)
-          .then(() => assigned++)
-          .catch(() => failed++)
-      );
-      // Process in batches of 10 to avoid rate limits
-      if (batch.length >= 10) {
-        await Promise.allSettled(batch.splice(0, 10));
-        await sleep(1000);
-      }
+    async fire(fn) {
+        if (this.state === 'OPEN') {
+            if (Date.now() - this.lastFailure > this.timeout) this.state = 'HALF_OPEN';
+            else throw new Error('Circuit breaker is OPEN');
+        }
+        try {
+            const result = await fn();
+            this._onSuccess();
+            return result;
+        } catch (err) {
+            this._onFailure();
+            throw err;
+        }
     }
-    if (batch.length) await Promise.allSettled(batch);
-
-    log('SUCCESS', `Auto-role bulk: +${assigned} assigned, ${skipped} skipped, ${failed} failed`);
-    await trackEvent('auto_role_bulk', { guildId: guild.id, assigned, skipped, failed });
-    return { assigned, skipped, failed };
-  } catch (err) {
-    log('ERROR', `assignAutoRoleToAll: ${err.message}`);
-    return { assigned: 0, skipped: 0, failed: 0 };
-  }
+    _onSuccess() { this.failures = 0; this.state = 'CLOSED'; }
+    _onFailure() { this.failures++; this.lastFailure = Date.now(); if (this.failures >= this.threshold) this.state = 'OPEN'; }
 }
 
-async function assignAutoRoleOnJoin(member) {
-  try {
-    if (member.user.bot) return;
-    const role = member.guild.roles.cache.get(CONFIG.autoRoleId);
-    if (role) {
-      await member.roles.add(role);
-      log('INFO', `Auto-role -> ${member.user.tag}`);
-      await trackEvent('auto_role_join', { userId: member.id, guildId: member.guild.id });
+class LRUCache {
+    constructor(maxSize = 5000, ttl = 120000) {
+        this.maxSize = maxSize;
+        this.ttl = ttl;
+        this.cache = new Map();
+        this.hits = 0; this.misses = 0;
     }
-  } catch (err) {
-    log('WARN', `assignAutoRoleOnJoin: ${err.message}`);
-  }
+    get(key) {
+        const e = this.cache.get(key);
+        if (!e) { this.misses++; return null; }
+        if (Date.now() - e.ts > this.ttl) { this.cache.delete(key); this.misses++; return null; }
+        this.cache.delete(key); this.cache.set(key, e);
+        this.hits++;
+        return e.value;
+    }
+    set(key, value) {
+        if (this.cache.has(key)) this.cache.delete(key);
+        else if (this.cache.size >= this.maxSize) {
+            const first = this.cache.keys().next().value;
+            this.cache.delete(first);
+        }
+        this.cache.set(key, { value, ts: Date.now() });
+    }
+    delete(key) { this.cache.delete(key); }
+    clear() { this.cache.clear(); }
+    stats() { return { size: this.cache.size, maxSize: this.maxSize, hits: this.hits, misses: this.misses, hitRate: this.hits / (this.hits + this.misses || 1) }; }
+    evictWhere(pred) { for (const [k, v] of this.cache) if (pred(k, v.value)) this.cache.delete(k); }
 }
 
-// =============================================================
-// JACKPOT
-// =============================================================
-async function addToJackpot(amount) {
-  const cut = Math.floor(amount * CONFIG.jackpotCut);
-  if (cut <= 0) return;
-  try {
-    await db.collection('jackpot').updateOne(
-      { id: 'main' }, { $inc: { pool: cut } }, { upsert: true }
-    );
-  } catch { /* non-critical */ }
-}
-async function getJackpot() {
-  try {
-    const d = await db.collection('jackpot').findOne({ id: 'main' });
-    return d?.pool || 0;
-  } catch { return 0; }
-}
-async function resetJackpot() {
-  try {
-    await db.collection('jackpot').updateOne(
-      { id: 'main' }, { $set: { pool: 0 } }, { upsert: true }
-    );
-  } catch { /* non-critical */ }
+class StructuredLogger {
+    constructor(level = 'INFO') {
+        this.levels = { TRACE: 0, DEBUG: 1, INFO: 2, WARN: 3, ERROR: 4, FATAL: 5 };
+        this.level = this.levels[level] ?? 2;
+        this._buffer = [];
+        this._maxBuffer = 2000;
+    }
+    _log(level, message, meta = {}) {
+        const lv = this.levels[level] ?? 2;
+        if (lv < this.level) return;
+        const ts = new Date().toISOString();
+        const entry = { ts, level, msg: message, ...meta };
+        this._buffer.push(entry);
+        if (this._buffer.length > this._maxBuffer) this._buffer.shift();
+        const icon = { TRACE: 'TRC', DEBUG: 'DBG', INFO: 'INF', WARN: 'WRN', ERROR: 'ERR', FATAL: 'FTL' }[level];
+        if (lv >= 4) console.error(`[${ts}] [${icon}]`, JSON.stringify(entry));
+        else console.log(`[${ts}] [${icon}]`, JSON.stringify(entry));
+    }
+    trace(m, meta) { this._log('TRACE', m, meta); }
+    debug(m, meta) { this._log('DEBUG', m, meta); }
+    info(m, meta) { this._log('INFO', m, meta); }
+    warn(m, meta) { this._log('WARN', m, meta); }
+    error(m, meta) { this._log('ERROR', m, meta); }
+    fatal(m, meta) { this._log('FATAL', m, meta); }
+    getBuffer() { return this._buffer; }
+    child(meta) {
+        const c = new StructuredLogger(Object.keys(this.levels).find(k => this.levels[k] === this.level));
+        c._baseMeta = meta;
+        return c;
+    }
 }
 
+class Metrics {
+    constructor() {
+        this.counters = new Map();
+        this.histograms = new Map();
+        this.gauges = new Map();
+    }
+    inc(name, labels = {}, value = 1) { const k = this._key(name, labels); this.counters.set(k, (this.counters.get(k) || 0) + value); }
+    record(name, value, labels = {}) { const k = this._key(name, labels); const arr = this.histograms.get(k) || []; arr.push(value); if (arr.length > 1000) arr.shift(); this.histograms.set(k, arr); }
+    gauge(name, value, labels = {}) { this.gauges.set(this._key(name, labels), value); }
+    _key(name, labels) { return name + ':' + JSON.stringify(labels); }
+    snapshot() {
+        const h = {};
+        for (const [k, arr] of this.histograms) {
+            arr.sort((a, b) => a - b);
+            h[k] = { count: arr.length, min: arr[0], max: arr[arr.length - 1], p50: arr[Math.floor(arr.length * 0.5)], p99: arr[Math.floor(arr.length * 0.99)] || arr[arr.length - 1] };
+        }
+        return { counters: Object.fromEntries(this.counters), gauges: Object.fromEntries(this.gauges), histograms: h };
+    }
+}
+
+class HealthMonitor {
+    constructor(logger) {
+        this.log = logger;
+        this.checks = new Map();
+        this.status = 'HEALTHY';
+        setInterval(() => this._runChecks(), 30000);
+    }
+    register(name, fn) { this.checks.set(name, fn); }
+    async _runChecks() {
+        let healthy = true;
+        for (const [name, fn] of this.checks) {
+            try { await fn(); } catch (e) { healthy = false; this.log.warn('Health check failed', { check: name, err: e.message }); }
+        }
+        this.status = healthy ? 'HEALTHY' : 'DEGRADED';
+    }
+    report() { return { status: this.status, uptime: process.uptime(), memory: process.memoryUsage(), checks: Array.from(this.checks.keys()) }; }
+}
+
+class Container {
+    constructor() { this.registry = new Map(); }
+    register(name, factory, { singleton = true } = {}) {
+        this.registry.set(name, { factory, singleton, instance: null });
+    }
+    resolve(name) {
+        const def = this.registry.get(name);
+        if (!def) throw new Error(`Service not registered: ${name}`);
+        if (def.singleton) {
+            if (!def.instance) def.instance = def.factory(this);
+            return def.instance;
+        }
+        return def.factory(this);
+    }
+}
+
+const container = new Container();
+const logger = new StructuredLogger(process.env.LOG_LEVEL || 'INFO');
+const metrics = new Metrics();
+const health = new HealthMonitor(logger);
+
 // =============================================================
-// RATE LIMITER
+// LOG WRAPPER (matches legacy signature: log('LEVEL', ...args))
 // =============================================================
-const rateLimits = new Map();
-const COOLDOWNS = {
-  daily: 86_400_000, slots: 3000,     roulette: 3000,
-  coinflip: 2000,    bet: 2000,       dice: 2000,
-  spin: 2000,        blackjack: 5000, allin: 10_000,
-  jackpot: 5000,     quality: 30_000, submit: 5000,
+const log = (...args) => {
+    const level = args[0] || 'INFO';
+    const message = args.slice(1).map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    logger._log(level, message);
 };
 
-function checkRateLimit(userId, cmd) {
-  const cd = COOLDOWNS[cmd];
-  if (!cd) return null;
-  const key = `${userId}:${cmd}`;
-  const rem = cd - (Date.now() - (rateLimits.get(key) || 0));
-  if (rem > 0) return rem;
-  rateLimits.set(key, Date.now());
-  return null;
+// =============================================================
+// MONGO MANAGER
+// =============================================================
+class MongoManager {
+    constructor(uri, dbName) {
+        this.uri = uri; this.dbName = dbName;
+        this.client = null; this.db = null;
+        this.connected = false;
+    }
+    async connect(retries = 5) {
+        for (let i = 1; i <= retries; i++) {
+            try {
+                this.client = new MongoClient(this.uri, { maxPoolSize: 30, serverSelectionTimeoutMS: 10000, retryWrites: true, w: 'majority' });
+                await this.client.connect();
+                this.db = this.client.db(this.dbName);
+                await this._ensureIndexes();
+                this.connected = true;
+                log('SUCCESS', 'MongoDB connected', { poolSize: 30 });
+                return;
+            } catch (err) {
+                log('ERROR', `MongoDB attempt ${i}/${retries}`, err.message);
+                if (i === retries) throw err;
+                await new Promise(r => setTimeout(r, i * 2000));
+            }
+        }
+    }
+    async _ensureIndexes() {
+        const db = this.db;
+        await db.collection('users').createIndex({ userId: 1 }, { unique: true });
+        await db.collection('users').createIndex({ elo: -1, peakElo: -1 });
+        await db.collection('users').createIndex({ rank: 1 });
+        await db.collection('submissions').createIndex({ reviewed: 1, submittedAt: -1 });
+        await db.collection('submissions').createIndex({ userId: 1 });
+        await db.collection('giveaways').createIndex({ endsAt: 1, ended: 1 });
+        await db.collection('guildConfigs').createIndex({ guildId: 1 }, { unique: true });
+        await db.collection('modCases').createIndex({ guildId: 1, createdAt: -1 });
+        await db.collection('modCases').createIndex({ targetId: 1 });
+        await db.collection('transactions').createIndex({ userId: 1, createdAt: -1 });
+        await db.collection('analytics').createIndex({ type: 1, timestamp: -1 });
+        await db.collection('command_logs').createIndex({ command: 1, timestamp: -1 });
+        await db.collection('jackpot').createIndex({ id: 1 }, { unique: true });
+        await db.collection('codes').createIndex({ code: 1 }, { unique: true });
+        await db.collection('settings').createIndex({ key: 1 }, { unique: true });
+        log('INFO', 'Database indexes ensured');
+    }
+    async transaction(fn) {
+        const session = this.client.startSession();
+        try {
+            session.startTransaction({ readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+            const result = await fn(session);
+            await session.commitTransaction();
+            return result;
+        } catch (err) {
+            await session.abortTransaction();
+            throw err;
+        } finally {
+            await session.endSession();
+        }
+    }
+    collection(name) { return this.db.collection(name); }
+    async close() { if (this.client) await this.client.close(); this.connected = false; }
 }
 
-// Clean stale rate limit entries every 10 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, ts] of rateLimits.entries()) {
-    if (now - ts > 86_400_000) rateLimits.delete(key);
-  }
-}, 600_000);
-
 // =============================================================
-// SNIPE CACHE
+// CACHE MANAGER (Tiered L1/L2)
 // =============================================================
-const snipeCache = new Map();
-
-// =============================================================
-// GIVEAWAYS
-// =============================================================
-const giveawayTimers = new Map();
-
-async function startGiveaway(channel, prize, winners, durationMs, hostedBy) {
-  const endsAt = new Date(Date.now() + durationMs);
-  const doc = await db.collection('giveaways').insertOne({
-    channelId: channel.id, guildId: channel.guildId,
-    prize, winners, endsAt, hostedBy,
-    entries: [], ended: false, createdAt: new Date(),
-  });
-  const id = doc.insertedId.toString();
-
-  const embed = new EmbedBuilder()
-    .setColor(0xFFD700)
-    .setTitle('GIVEAWAY')
-    .setDescription(
-      `**Prize:** ${prize}\n` +
-      `**Winners:** ${winners}\n` +
-      `**Ends:** <t:${Math.floor(endsAt.getTime() / 1000)}:R>\n` +
-      `**Hosted by:** <@${hostedBy}>\n\n` +
-      `Click the button below to enter!`
-    )
-    .setFooter({ text: `ID: ${id}` })
-    .setTimestamp(endsAt);
-
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`gw_enter_${id}`)
-      .setLabel('Enter Giveaway')
-      .setStyle(ButtonStyle.Primary)
-  );
-
-  const msg = await channel.send({ embeds: [embed], components: [row] });
-  giveawayTimers.set(id, setTimeout(() => endGiveaway(id, msg), durationMs));
-  await trackEvent('giveaway_start', { channelId: channel.id, prize, winners });
-  return doc.insertedId;
+class CacheManager {
+    constructor(ttl = 120000, maxSize = 5000) {
+        this.l1 = new LRUCache(maxSize, ttl);
+        this.l2 = new LRUCache(maxSize * 2, ttl * 2);
+    }
+    get(key) {
+        let v = this.l1.get(key);
+        if (v !== null) { metrics.inc('cache_hit', { tier: 'l1' }); return v; }
+        v = this.l2.get(key);
+        if (v !== null) { this.l1.set(key, v); metrics.inc('cache_hit', { tier: 'l2' }); return v; }
+        metrics.inc('cache_miss');
+        return null;
+    }
+    set(key, value, opts = {}) {
+        if (opts.hot) this.l1.set(key, value);
+        else this.l2.set(key, value);
+    }
+    invalidate(pattern) {
+        this.l1.evictWhere((k, v) => k.includes(pattern));
+        this.l2.evictWhere((k, v) => k.includes(pattern));
+    }
+    underPressure() {
+        const mem = process.memoryUsage();
+        return mem.heapUsed / mem.heapTotal > 0.85;
+    }
+    maybeEvict() {
+        if (this.underPressure()) {
+            const target = Math.floor(this.l1.cache.size * 0.3);
+            let i = 0;
+            for (const k of this.l1.cache.keys()) {
+                if (i >= target) break;
+                this.l1.delete(k); i++;
+            }
+            log('WARN', 'Cache evicted under memory pressure', { evicted: i });
+        }
+    }
+    stats() { return { l1: this.l1.stats(), l2: this.l2.stats(), pressure: this.underPressure() }; }
 }
 
-async function endGiveaway(gwId, msg) {
-  try {
-    const gw = await db.collection('giveaways').findOneAndUpdate(
-      { _id: new ObjectId(gwId), ended: false },
-      { $set: { ended: true, endedAt: new Date() } },
-      { returnDocument: 'before' }
-    );
-    if (!gw) return;
+// =============================================================
+// TOKEN BUCKET RATE LIMITER
+// =============================================================
+class TokenBucket {
+    constructor(capacity, refillRateMs) {
+        this.capacity = capacity;
+        this.refillRate = refillRateMs;
+        this.buckets = new Map();
+    }
+    consume(key, tokens = 1) {
+        const now = Date.now();
+        let b = this.buckets.get(key);
+        if (!b) { b = { tokens: this.capacity, last: now }; this.buckets.set(key, b); }
+        const refill = Math.floor((now - b.last) / this.refillRate);
+        b.tokens = Math.min(this.capacity, b.tokens + refill);
+        b.last = now;
+        if (b.tokens >= tokens) { b.tokens -= tokens; return { allowed: true, remaining: b.tokens }; }
+        const waitMs = this.refillRate * (tokens - b.tokens);
+        return { allowed: false, remaining: b.tokens, retryAfter: waitMs };
+    }
+}
 
-    const entries = gw.entries || [];
-    let winnerMentions = 'No entries — no winner!';
-    let picked = [];
+// =============================================================
+// SECURITY MANAGER
+// =============================================================
+class SecurityManager {
+    static sanitize(str) {
+        if (typeof str !== 'string') return '';
+        return str.replace(/[;&|`$\\{}[\]\n\r]/g, '').slice(0, 2000);
+    }
+    static isDangerousUrl(url) {
+        try {
+            const u = new URL(url);
+            return ['file:', 'ftp:', 'data:', 'javascript:'].includes(u.protocol);
+        } catch { return true; }
+    }
+    static validateVideoUrl(url) {
+        return /https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|streamable\.com\/|tiktok\.com\/|cdn\.discordapp\.com\/|media\.discordapp\.net\/)/i.test(url);
+    }
+}
 
-    if (entries.length > 0) {
-      const shuffled = [...entries].sort(() => Math.random() - 0.5);
-      picked = shuffled.slice(0, Math.min(gw.winners, entries.length));
-      winnerMentions = picked.map(id => `<@${id}>`).join(', ');
-      await db.collection('giveaways').updateOne(
-        { _id: gw._id }, { $set: { winnerIds: picked } }
-      );
+// =============================================================
+// CINEMATIC VIDEO PROCESSOR
+// =============================================================
+class CinematicProcessor {
+    constructor(queue, logger) {
+        this.queue = queue;
+        this.log = logger.child({ module: 'CinematicProcessor' });
+        this.tempDir = '/tmp/godmode_v8';
+        this.presets = {
+            restore: {
+                stages: [
+                    { filter: 'deblock', params: { filter: 'strong' } },
+                    { filter: 'dedot', params: {} },
+                    { filter: 'nlmeans', params: { s: 3, p: 5, pc: 5 } },
+                    { filter: 'hqdn3d', params: { luma_spat: 4, chroma_spat: 3, luma_tmp: 6, chroma_tmp: 4 } },
+                    { filter: 'bilateral', params: { sigmaS: 3, sigmaR: 0.05 } },
+                    { filter: 'unsharp', params: { luma_msize_x: 5, luma_msize_y: 5, luma_amount: 1.2 } },
+                    { filter: 'zscale', params: { f: 'spline36', r: 'full' } },
+                    { filter: 'eq', params: { brightness: 0.02, contrast: 1.05, saturation: 1.1 } }
+                ],
+                encode: CONFIG.videoPresets.quality
+            },
+            cinematic: {
+                stages: [
+                    { filter: 'bm3d', params: { sigma: 4 } },
+                    { filter: 'smartblur', params: { lr: 1.2, lg: 1.2, lb: 1.2 } },
+                    { filter: 'unsharp', params: { luma_msize_x: 7, luma_msize_y: 7, luma_amount: 0.8, chroma_amount: 0.4 } },
+                    { filter: 'zscale', params: { f: 'lanczos', r: 'full' } },
+                    { filter: 'eq', params: { brightness: 0.01, contrast: 1.08, saturation: 1.15 } }
+                ],
+                encode: CONFIG.videoPresets.lossless
+            },
+            ai_ready: {
+                stages: [
+                    { filter: 'deblock', params: { filter: 'strong' } },
+                    { filter: 'nlmeans', params: { s: 2, p: 3, pc: 3 } },
+                    { filter: 'zscale', params: { f: 'spline36', r: 'full' } }
+                ],
+                encode: CONFIG.videoPresets.quality,
+                aiUpscale: true
+            }
+        };
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(0xFF4444)
-      .setTitle('GIVEAWAY ENDED')
-      .setDescription(`**Prize:** ${gw.prize}\n**Winners:** ${winnerMentions}`)
-      .setTimestamp();
-
-    if (msg) await msg.edit({ embeds: [embed], components: [] }).catch(() => {});
-    if (msg && picked.length > 0) {
-      await msg.channel
-        .send(`Congratulations ${winnerMentions}! You won **${gw.prize}**!`)
-        .catch(() => {});
+    _buildFilterComplex(presetName, w, h, targetW = 1920) {
+        const preset = this.presets[presetName] || this.presets.restore;
+        const targetH = Math.round(h * (targetW / w));
+        const filters = [];
+        for (const stage of preset.stages) {
+            let f = stage.filter;
+            switch (f) {
+                case 'nlmeans':
+                    const { s = 3, p = 5, pc = 5 } = stage.params;
+                    filters.push(`nlmeans=s=${s}:p=${p}:pc=${pc}`);
+                    break;
+                case 'hqdn3d':
+                    const { luma_spat = 4, chroma_spat = 3, luma_tmp = 6, chroma_tmp = 4 } = stage.params;
+                    filters.push(`hqdn3d=${luma_spat}:${chroma_spat}:${luma_tmp}:${chroma_tmp}`);
+                    break;
+                case 'bm3d':
+                    filters.push(`bm3d=sigma=${stage.params.sigma || 4}:block=8:bstep=2:group=1`);
+                    break;
+                case 'bilateral':
+                    filters.push(`bilateral=sigmaS=${stage.params.sigmaS || 3}:sigmaR=${stage.params.sigmaR || 0.05}`);
+                    break;
+                case 'unsharp':
+                    const { luma_msize_x = 5, luma_msize_y = 5, luma_amount = 1.2, chroma_amount = 0 } = stage.params;
+                    filters.push(`unsharp=luma_msize_x=${luma_msize_x}:luma_msize_y=${luma_msize_y}:luma_amount=${luma_amount}:chroma_amount=${chroma_amount}`);
+                    break;
+                case 'smartblur':
+                    filters.push(`smartblur=lr=${stage.params.lr || 1.2}:lg=${stage.params.lg || 1.2}:lb=${stage.params.lb || 1.2}`);
+                    break;
+                case 'zscale':
+                    const zf = stage.params.f || 'spline36';
+                    filters.push(`zscale=f=${zf}:w=${targetW}:h=${targetH}:range=full`);
+                    break;
+                case 'eq':
+                    const { brightness = 0, contrast = 1.0, saturation = 1.0 } = stage.params;
+                    filters.push(`eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}`);
+                    break;
+                case 'deblock':
+                    filters.push(`deblock=filter=${stage.params.filter || 'strong'}:block=8`);
+                    break;
+                case 'dedot':
+                    filters.push('dedot=mx=4:my=4');
+                    break;
+            }
+        }
+        return filters.join(',');
     }
-    giveawayTimers.delete(gwId);
-  } catch (err) {
-    log('ERROR', `endGiveaway: ${err.message}`);
-  }
-}
 
-async function resumeGiveaways() {
-  try {
-    const active = await db.collection('giveaways').find({ ended: false }).toArray();
-    let resumed = 0;
-    for (const gw of active) {
-      const rem = new Date(gw.endsAt).getTime() - Date.now();
-      const id = gw._id.toString();
-      if (rem <= 0) {
-        await endGiveaway(id, null);
-        continue;
-      }
-      const ch = client.channels.cache.get(gw.channelId);
-      if (!ch) continue;
-      const msgs = await ch.messages.fetch({ limit: 50 }).catch(() => null);
-      const gwMsg = msgs?.find(m => m.embeds[0]?.footer?.text?.includes(id));
-      giveawayTimers.set(id, setTimeout(() => endGiveaway(id, gwMsg || null), rem));
-      resumed++;
+    async process(sourceUrl, options = {}) {
+        const { preset = 'restore', targetWidth = 1920, outputFormat = 'mp4' } = options;
+        const jobId = crypto.randomUUID();
+        metrics.inc('video_jobs_started', { preset });
+        return this.queue.enqueue(jobId, async () => {
+            const start = Date.now();
+            const tmpIn = path.join(this.tempDir, `in_${jobId}.mp4`);
+            const tmpOut = path.join(this.tempDir, `out_${jobId}.${outputFormat}`);
+            try {
+                await fs.mkdir(this.tempDir, { recursive: true });
+                const dlStart = Date.now();
+                const resp = await fetch(sourceUrl);
+                if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
+                const buf = Buffer.from(await resp.arrayBuffer());
+                if (buf.length > 250 * 1024 * 1024) throw new Error('Video exceeds 250MB limit');
+                await fs.writeFile(tmpIn, buf);
+                metrics.record('video_download', Date.now() - dlStart, { preset });
+                const probe = await this._probe(tmpIn);
+                const w = probe.width || 1280, h = probe.height || 720;
+                this.log.info('Probed source', { jobId, w, h, duration: probe.duration });
+                const filterComplex = this._buildFilterComplex(preset, w, h, targetWidth);
+                const enc = this.presets[preset]?.encode || CONFIG.videoPresets.quality;
+                if (preset === 'cinematic' || preset === 'lossless') {
+                    const passlog = path.join(this.tempDir, `pass_${jobId}`);
+                    const pass1 = `ffmpeg -hide_banner -y -i ${tmpIn} -vf "${filterComplex}" -c:v libx264 -b:v 0 -crf ${enc.crf} -preset ${enc.preset} -pass 1 -passlogfile ${passlog} -an -f null /dev/null`;
+                    const pass2 = `ffmpeg -hide_banner -y -i ${tmpIn} -vf "${filterComplex}" -c:v libx264 -crf ${enc.crf} -preset ${enc.preset} -tune ${enc.tune} -pass 2 -passlogfile ${passlog} -movflags +faststart -an ${tmpOut}`;
+                    await this._exec(pass1, 600000);
+                    await this._exec(pass2, 600000);
+                    await fs.unlink(`${passlog}-0.log`).catch(() => {});
+                    await fs.unlink(`${passlog}-0.log.mbtree`).catch(() => {});
+                } else {
+                    const ffmpegCmd = `ffmpeg -hide_banner -y -i ${tmpIn} -vf "${filterComplex}" -c:v libx264 -crf ${enc.crf} -preset ${enc.preset} -tune ${enc.tune} -movflags +faststart -an ${tmpOut}`;
+                    await this._exec(ffmpegCmd, 600000);
+                }
+                const stats = await fs.stat(tmpOut);
+                const duration = Date.now() - start;
+                metrics.record('video_process', duration, { preset });
+                metrics.inc('video_jobs_success', { preset });
+                this.log.info('Video processed', { jobId, duration, size: stats.size });
+                await fs.unlink(tmpIn).catch(() => {});
+                return { filePath: tmpOut, jobId, duration, size: stats.size, width: targetWidth, height: Math.round(h * (targetWidth / w)) };
+            } catch (err) {
+                metrics.inc('video_jobs_failed', { preset });
+                this.log.error('Video processing failed', { jobId, err: err.message });
+                await fs.unlink(tmpIn).catch(() => {});
+                await fs.unlink(tmpOut).catch(() => {});
+                throw err;
+            }
+        });
     }
-    log('SUCCESS', `Resumed ${resumed} active giveaway(s)`);
-  } catch (err) {
-    log('ERROR', `resumeGiveaways: ${err.message}`);
-  }
-}
 
-// =============================================================
-// FUZZY MATCHING
-// =============================================================
-function levenshtein(a, b) {
-  const dp = Array.from({ length: a.length + 1 }, (_, i) =>
-    Array.from({ length: b.length + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0)
-  );
-  for (let i = 1; i <= a.length; i++)
-    for (let j = 1; j <= b.length; j++)
-      dp[i][j] = a[i-1] === b[j-1]
-        ? dp[i-1][j-1]
-        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
-  return dp[a.length][b.length];
-}
-
-function fuzzyMatch(input, commands) {
-  let best = null, bestScore = Infinity;
-  for (const c of commands) {
-    const s = levenshtein(input.toLowerCase(), c.toLowerCase());
-    if (s < bestScore) { bestScore = s; best = c; }
-  }
-  return bestScore <= 3 ? best : null;
-}
-
-function scoreFuzzyRole(roleName, target) {
-  const a = roleName.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const b = target.toLowerCase();
-  if (a === b) return 0;
-  if (a.includes(b) || b.includes(a)) return 1;
-  return levenshtein(a, b);
-}
-
-// =============================================================
-// AUTO-DETECT (Roles + Channels)
-// =============================================================
-async function autoDetectRankRoles(guild) {
-  const roles = {};
-  for (const target of RANKS.map(r => r.name)) {
-    let best = null, bestScore = Infinity;
-    guild.roles.cache.forEach(role => {
-      if (role.managed || role.name === '@everyone') return;
-      const score = scoreFuzzyRole(role.name, target);
-      if (score < bestScore) { bestScore = score; best = role; }
-    });
-    if (best && bestScore <= 3) {
-      roles[target] = best.id;
-      log('SUCCESS', `Rank role "${target}" -> "#${best.name}"`);
+    _exec(cmd, timeout = 300000) {
+        return new Promise((resolve, reject) => {
+            exec(cmd, { timeout, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
+                if (err) reject(new Error(stderr || err.message));
+                else resolve(stdout);
+            });
+        });
     }
-  }
-  guildRankRoles.set(guild.id, roles);
-  Object.assign(CONFIG.rankRoles, roles);
-  return roles;
-}
-
-async function autoDetectChannels(guild) {
-  const reviewPat = ['clip-review', 'clipreview', 'review', 'submissions', 'clips'];
-  const logPat    = ['mod-logs', 'modlogs', 'mod-log', 'logs', 'audit'];
-
-  const findCh = pats => {
-    for (const p of pats) {
-      const ch = guild.channels.cache.find(c =>
-        c.isTextBased() &&
-        c.name.toLowerCase().replace(/[^a-z0-9]/g, '').includes(p.replace(/[^a-z0-9]/g, ''))
-      );
-      if (ch) return ch;
+    async _probe(file) {
+        const out = await this._exec(`ffprobe -v error -select_streams v:0 -show_entries stream=width,height,duration,bit_rate -of json ${file}`, 30000);
+        const data = JSON.parse(out);
+        const s = data?.streams?.[0] || {};
+        return { width: s.width, height: s.height, duration: parseFloat(s.duration) || 0, bitrate: parseInt(s.bit_rate) || 0 };
     }
-    return null;
-  };
-
-  const rCh = findCh(reviewPat);
-  const lCh = findCh(logPat);
-  if (rCh) { CONFIG.reviewChannelId = rCh.id; log('SUCCESS', `Review channel -> #${rCh.name}`); }
-  if (lCh) { CONFIG.logChannelId = lCh.id;    log('SUCCESS', `Log channel -> #${lCh.name}`); }
-}
-
-// =============================================================
-// XP / LEVEL SYSTEM
-// =============================================================
-const XP_COOLDOWNS = new Map();
-
-async function handleXP(message) {
-  if (XP_COOLDOWNS.has(message.author.id)) return;
-  XP_COOLDOWNS.set(message.author.id, true);
-  setTimeout(() => XP_COOLDOWNS.delete(message.author.id), 60_000);
-
-  try {
-    const ud = await getUser(message.author.id);
-    const xpGain = Math.floor(Math.random() * 15) + 5;  // 5-20 XP per message
-    const newXP  = ud.xp + xpGain;
-    const needed = Math.floor(100 * Math.pow(1.15, ud.level));  // Exponential scaling
-
-    if (newXP >= needed) {
-      const newLvl = ud.level + 1;
-      const bonus  = newLvl * 50;  // Coin bonus per level
-      await updateUser(message.author.id, { xp: newXP - needed, level: newLvl });
-      await addBalance(message.author.id, bonus);
-
-      const embed = new EmbedBuilder()
-        .setColor(0xFFD700)
-        .setTitle('LEVEL UP!')
-        .setDescription(
-          `${message.author} reached **Level ${newLvl}**!\n` +
-          `+${bonus} coins bonus!`
-        )
-        .setFooter({ text: `Next level needs ${Math.floor(100 * Math.pow(1.15, newLvl))} XP` });
-
-      autoDelete(await message.channel.send({ embeds: [embed] }), 15);
-      await trackEvent('level_up', { userId: message.author.id, level: newLvl });
-    } else {
-      await updateUser(message.author.id, { xp: newXP });
+    async cleanupOldJobs(maxAgeMs = 3600000) {
+        try {
+            const files = await fs.readdir(this.tempDir);
+            const now = Date.now();
+            for (const f of files) {
+                const fp = path.join(this.tempDir, f);
+                const stat = await fs.stat(fp);
+                if (now - stat.mtimeMs > maxAgeMs) await fs.unlink(fp).catch(() => {});
+            }
+        } catch (e) { this.log.warn('Cleanup error', { err: e.message }); }
     }
-  } catch (err) {
-    log('WARN', `XP: ${err.message}`);
-  }
 }
 
 // =============================================================
-// MOD LOG
+// RANK ENGINE
 // =============================================================
-async function modLog(guild, action, moderator, target, reason = 'No reason provided') {
-  try {
-    const tTag = target?.tag || target?.user?.tag || 'N/A';
-    const tId  = target?.id  || target?.user?.id  || 'unknown';
-
-    await db.collection('audit').insertOne({
-      action, moderatorId: moderator.id, moderatorTag: moderator.tag,
-      targetTag: tTag, targetId: tId, reason,
-      guildId: guild.id, timestamp: new Date(),
-    });
-
-    const ch = guild.channels.cache.get(CONFIG.logChannelId);
-    if (!ch) return;
-
-    const embed = new EmbedBuilder()
-      .setColor(0xFF4444)
-      .setTitle(`Mod Action: ${action}`)
-      .addFields(
-        { name: 'Moderator', value: `${moderator.tag} (${moderator.id})`, inline: true },
-        { name: 'Target',    value: `${tTag} (${tId})`,                   inline: true },
-        { name: 'Reason',    value: reason }
-      )
-      .setTimestamp();
-
-    await ch.send({ embeds: [embed] });
-  } catch (err) {
-    log('WARN', `modLog: ${err.message}`);
-  }
+class RankEngine {
+    constructor(db, logger) {
+        this.db = db; this.log = logger.child({ module: 'RankEngine' });
+        this.RANKS = [
+            { name: 'Bronze', elo: 0, color: 0x8d6e63 },
+            { name: 'Silver', elo: 1200, color: 0xb0bec5 },
+            { name: 'Gold', elo: 1800, color: 0xf1c40f },
+            { name: 'Platinum', elo: 2500, color: 0x00bcd4 },
+            { name: 'Diamond', elo: 3500, color: 0x3498db },
+            { name: 'Master', elo: 4800, color: 0x9b59b6 },
+            { name: 'Legend', elo: 6500, color: 0xe74c3c },
+        ];
+    }
+    getRank(elo) { return this.RANKS.slice().reverse().find(r => elo >= r.elo) || this.RANKS[0]; }
+    calcEloChange(rating, currentElo, streak, peakElo) {
+        const scoreMap = { A: 6, S: 7.5, SS: 9, SSS: 10, F: -5 };
+        let score = scoreMap[rating] || 6;
+        let gain = (score - 5.5) * 50;
+        if (streak >= 5) gain *= 1.8;
+        else if (streak >= 3) gain *= 1.5;
+        else if (streak >= 2) gain *= 1.2;
+        if (currentElo > 4000) gain *= 0.55;
+        else if (currentElo > 3000) gain *= 0.7;
+        else if (currentElo > 2500) gain *= 0.85;
+        const newElo = currentElo + Math.round(gain);
+        const peakBonus = newElo > peakElo ? Math.round((newElo - peakElo) * 0.1) : 0;
+        return Math.round(gain) + peakBonus;
+    }
+    async decay(userId) {
+        const u = await this.db.collection('users').findOne({ userId });
+        if (!u || u.elo < 1500) return;
+        const days = (Date.now() - (u.lastActive || Date.now())) / 86400000;
+        if (days < 7) return;
+        const decay = Math.floor(Math.min(days * 2, u.elo * 0.1));
+        await this.db.collection('users').updateOne({ userId }, { $inc: { elo: -decay } });
+        this.log.info('ELO decay applied', { userId, decay });
+    }
+    async applyRankRoles(guild, member, elo, guildRolesConfig) {
+        const rankObj = this.getRank(elo);
+        const roles = guildRolesConfig || {};
+        try {
+            const currentRankRoles = this.RANKS.map(r => roles[r.name]).filter(Boolean);
+            await member.roles.remove(currentRankRoles.filter(id => member.roles.cache.has(id))).catch(() => {});
+            const newRoleId = roles[rankObj.name];
+            if (newRoleId && !member.roles.cache.has(newRoleId)) await member.roles.add(newRoleId).catch(() => {});
+            return rankObj;
+        } catch (err) { this.log.warn('Role update failed', { guild: guild.id, user: member.id, err: err.message }); return rankObj; }
+    }
 }
+
+// =============================================================
+// GIVEAWAY ENGINE
+// =============================================================
+class GiveawayEngine {
+    constructor(db, client, logger) {
+        this.db = db; this.client = client; this.log = logger.child({ module: 'GiveawayEngine' });
+        this.timers = new Map();
+        this.lock = new Map();
+    }
+    async schedule(gwId, endsAt, channelId, messageId = null) {
+        const remaining = endsAt.getTime() - Date.now();
+        if (remaining <= 0) return this.end(gwId);
+        const timer = setTimeout(() => this.end(gwId), remaining);
+        this.timers.set(gwId, timer);
+    }
+    async start(channel, prize, winnerCount, durationMs, hostedById, options = {}) {
+        const endsAt = new Date(Date.now() + durationMs);
+        const doc = await this.db.collection('giveaways').insertOne({
+            channelId: channel.id, guildId: channel.guildId, prize, winnerCount,
+            endsAt, hostedBy: hostedById, entries: [], ended: false, winners: [],
+            requirements: options.requirements || {}, createdAt: new Date()
+        });
+        const gwId = doc.insertedId.toString();
+        const embed = new EmbedBuilder()
+            .setColor(0xFFD700).setTitle('🎉 GIVEAWAY 🎉')
+            .setDescription(`**Prize:** ${prize}\n**Winners:** ${winnerCount}\n**Ends:** <t:${Math.floor(endsAt.getTime() / 1000)}:R>\n**Hosted by:** <@${hostedById}>\n\nClick the button to enter!`)
+            .setFooter({ text: `ID: ${gwId}` });
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`gw_enter_${gwId}`).setLabel('Enter').setStyle(ButtonStyle.Success).setEmoji('🎉')
+        );
+        const msg = await channel.send({ embeds: [embed], components: [row] });
+        await this.db.collection('giveaways').updateOne({ _id: doc.insertedId }, { $set: { messageId: msg.id } });
+        await this.schedule(gwId, endsAt, channel.id, msg.id);
+        return gwId;
+    }
+    async end(gwId) {
+        if (this.lock.get(gwId)) return;
+        this.lock.set(gwId, true);
+        try {
+            const gw = await this.db.collection('giveaways').findOne({ _id: new ObjectId(gwId) });
+            if (!gw || gw.ended) return;
+            await this.db.collection('giveaways').updateOne({ _id: gw._id }, { $set: { ended: true } });
+            const entries = gw.entries || [];
+            let winners = [], winnersText = 'No entries.';
+            if (entries.length > 0) {
+                const shuffled = [...entries];
+                for (let i = shuffled.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+                }
+                winners = shuffled.slice(0, Math.min(gw.winnerCount, entries.length));
+                winnersText = winners.map(id => `<@${id}>`).join(', ');
+            }
+            await this.db.collection('giveaways').updateOne({ _id: gw._id }, { $set: { winners } });
+            const embed = new EmbedBuilder().setColor(0xFF4444).setTitle('GIVEAWAY ENDED').setDescription(`**Prize:** ${gw.prize}\n**Winners:** ${winnersText}`);
+            const channel = this.client.channels.cache.get(gw.channelId);
+            if (channel && gw.messageId) {
+                const msg = await channel.messages.fetch(gw.messageId).catch(() => null);
+                if (msg) await msg.edit({ embeds: [embed], components: [] }).catch(() => {});
+                if (winners.length > 0) await channel.send(`Congratulations ${winnersText}! You won **${gw.prize}**!`).catch(() => {});
+            }
+        } catch (err) { this.log.error('Giveaway end failed', { gwId, err: err.message }); }
+        finally { this.lock.delete(gwId); this.timers.delete(gwId); }
+    }
+    async resumeAll() {
+        const active = await this.db.collection('giveaways').find({ ended: false }).toArray();
+        for (const gw of active) await this.schedule(gw._id.toString(), gw.endsAt, gw.channelId, gw.messageId);
+        this.log.info('Resumed giveaways', { count: active.length });
+    }
+    async enter(gwId, userId) {
+        const gw = await this.db.collection('giveaways').findOne({ _id: new ObjectId(gwId) });
+        if (!gw || gw.ended) throw new Error('Giveaway ended or not found');
+        if (gw.entries.includes(userId)) throw new Error('Already entered');
+        await this.db.collection('giveaways').updateOne({ _id: gw._id }, { $push: { entries: userId } });
+        metrics.inc('giveaway_entries');
+    }
+}
+
+// =============================================================
+// MODERATION SUITE
+// =============================================================
+class ModerationSuite {
+    constructor(db, logger) {
+        this.db = db; this.log = logger.child({ module: 'ModerationSuite' });
+    }
+    async createCase(guildId, action, moderatorId, targetId, reason, duration = null, metadata = {}) {
+        const caseNum = (await this.db.collection('modCases').countDocuments({ guildId })) + 1;
+        const doc = { guildId, caseNum, action, moderatorId, targetId, reason, duration, active: ['BAN', 'MUTE', 'SOFTBAN', 'TEMPBAN'].includes(action), createdAt: new Date(), ...metadata };
+        await this.db.collection('modCases').insertOne(doc);
+        metrics.inc('mod_actions', { action });
+        return doc;
+    }
+    async softban(guild, member, moderator, reason = 'Softban', durationMs = 3600000) {
+        await member.ban({ reason: `Softban: ${reason}` });
+        await this.createCase(guild.id, 'SOFTBAN', moderator.id, member.id, reason, durationMs);
+        setTimeout(async () => {
+            try {
+                await guild.members.unban(member.id, 'Softban expired');
+                await this.db.collection('modCases').updateOne({ guildId: guild.id, targetId: member.id, action: 'SOFTBAN', active: true }, { $set: { active: false, expiredAt: new Date() } });
+            } catch (e) { this.log.error('Softban expiry failed', { err: e.message }); }
+        }, durationMs);
+    }
+    async tempban(guild, member, moderator, reason = 'Tempban', durationMs = 86400000) {
+        await member.ban({ reason: `Tempban: ${reason}` });
+        await this.createCase(guild.id, 'TEMPBAN', moderator.id, member.id, reason, durationMs);
+        setTimeout(async () => {
+            try {
+                await guild.members.unban(member.id, 'Tempban expired');
+                await this.db.collection('modCases').updateOne({ guildId: guild.id, targetId: member.id, action: 'TEMPBAN', active: true }, { $set: { active: false, expiredAt: new Date() } });
+            } catch (e) { this.log.error('Tempban expiry failed', { err: e.message }); }
+        }, durationMs);
+    }
+    async warn(guild, targetId, moderatorId, reason) {
+        await this.db.collection('users').updateOne({ userId: targetId }, { $push: { warns: { reason, by: moderatorId, at: new Date() } } });
+        return this.createCase(guild.id, 'WARN', moderatorId, targetId, reason);
+    }
+    async getCases(guildId, targetId, limit = 10) {
+        return this.db.collection('modCases').find({ guildId, targetId }).sort({ createdAt: -1 }).limit(limit).toArray();
+    }
+}
+
+// =============================================================
+// XP SYSTEM
+// =============================================================
+class XPSystem {
+    constructor(db, cache, logger) {
+        this.db = db; this.cache = cache; this.log = logger.child({ module: 'XPSystem' });
+        this.cooldowns = new Map();
+        this.voiceSessions = new Map();
+    }
+    async grantMessageXP(userId, guildId, multiplier = 1) {
+        if (this.cooldowns.has(userId)) return;
+        this.cooldowns.set(userId, true);
+        setTimeout(() => this.cooldowns.delete(userId), 60000);
+        const base = Math.floor((Math.random() * 10 + 5) * multiplier);
+        const key = `xp:${userId}`;
+        let u = this.cache.get(key);
+        if (!u) { u = await this.db.collection('users').findOne({ userId }); if (u) this.cache.set(key, u, { hot: true }); }
+        if (!u) return;
+        const needed = Math.floor(100 * Math.pow(1.15, u.level || 1));
+        const newXP = (u.xp || 0) + base;
+        const update = { xp: newXP, lastActive: new Date() };
+        let leveled = false;
+        if (newXP >= needed) {
+            update.xp = newXP - needed;
+            update.level = (u.level || 1) + 1;
+            leveled = true;
+        }
+        await this.db.collection('users').updateOne({ userId }, { $set: update });
+        this.cache.set(key, { ...u, ...update }, { hot: true });
+        metrics.inc('xp_granted', { type: 'message' });
+        return { leveled, newLevel: update.level, xpGain: base };
+    }
+    async grantVoiceXP(guildId, userId) {
+        const session = this.voiceSessions.get(guildId)?.get(userId);
+        if (!session) return;
+        const minutes = Math.floor((Date.now() - session) / 60000);
+        if (minutes < 1) return;
+        const xp = minutes * 2;
+        await this.db.collection('users').updateOne({ userId }, { $inc: { xp: xp, voiceTime: minutes }, $set: { lastActive: new Date() } });
+        metrics.inc('xp_granted', { type: 'voice' });
+    }
+    voiceJoin(guildId, userId) {
+        if (!this.voiceSessions.has(guildId)) this.voiceSessions.set(guildId, new Map());
+        this.voiceSessions.get(guildId).set(userId, Date.now());
+    }
+    voiceLeave(guildId, userId) {
+        this.grantVoiceXP(guildId, userId);
+        this.voiceSessions.get(guildId)?.delete(userId);
+    }
+}
+
+// =============================================================
+// GUILD CONFIG ENGINE
+// =============================================================
+class GuildConfigEngine {
+    constructor(db, cache, logger) {
+        this.db = db; this.cache = cache; this.log = logger.child({ module: 'GuildConfigEngine' });
+    }
+    async get(guildId) {
+        const key = `cfg:${guildId}`;
+        let cfg = this.cache.get(key);
+        if (cfg) return cfg;
+        cfg = await this.db.collection('guildConfigs').findOne({ guildId });
+        if (!cfg) {
+            cfg = {
+                guildId, prefix: CONFIG.prefix, rankRoles: {}, autoRoles: [],
+                logChannelId: null, reviewChannelId: null, muteRoleId: null,
+                xpMultiplier: 1, antiInvite: false, antiSpam: false,
+                welcomeChannelId: null, welcomeMessage: null, createdAt: new Date()
+            };
+            await this.db.collection('guildConfigs').insertOne(cfg);
+        }
+        this.cache.set(key, cfg);
+        return cfg;
+    }
+    async set(guildId, update) {
+        await this.db.collection('guildConfigs').updateOne({ guildId }, { $set: update }, { upsert: true });
+        this.cache.invalidate(`cfg:${guildId}`);
+    }
+}
+
+// =============================================================
+// COMMAND REGISTRY
+// =============================================================
+class CommandRegistry {
+    constructor(logger) {
+        this.commands = new Map();
+        this.middleware = [];
+        this.log = logger.child({ module: 'CommandRegistry' });
+        this.HELP = {};
+    }
+    use(mw) { this.middleware.push(mw); }
+    register(def) {
+        if (!def.name || !def.execute) throw new Error('Command must have name and execute');
+        this.commands.set(def.name, def);
+        this.HELP[def.name] = { desc: def.desc || 'No description', usage: def.usage || `!${def.name}` };
+        if (def.aliases) def.aliases.forEach(a => this.commands.set(a, { ...def, name: a, isAlias: true }));
+    }
+    async dispatch(ctx) {
+        const def = this.commands.get(ctx.cmd);
+        if (!def) return false;
+        ctx.def = def;
+        metrics.inc('commands_invoked', { cmd: def.name });
+        const start = Date.now();
+        try {
+            for (const mw of this.middleware) {
+                const result = await mw(ctx);
+                if (result === false) return true;
+            }
+            await def.execute(ctx);
+            metrics.record('command_duration', Date.now() - start, { cmd: def.name });
+            return true;
+        } catch (err) {
+            metrics.inc('commands_failed', { cmd: def.name });
+            this.log.error('Command failed', { cmd: def.name, err: err.message, user: ctx.message?.author?.id });
+            throw err;
+        }
+    }
+}
+
+// =============================================================
+// AUTOMOD ENGINE
+// =============================================================
+class AutoModEngine {
+    constructor(db, modSuite, logger) {
+        this.db = db; this.mod = modSuite; this.log = logger.child({ module: 'AutoMod' });
+        this.spamTracker = new Map();
+        this.inviteRegex = /(discord\.gg|discord\.com\/invite|discordapp\.com\/invite)\/[a-zA-Z0-9-]+/i;
+    }
+    async scan(message) {
+        const cfg = await container.resolve('guildConfig').get(message.guild.id);
+        if (!cfg) return;
+        if (cfg.antiInvite && this.inviteRegex.test(message.content)) {
+            await message.delete().catch(() => {});
+            await message.member.timeout(300000, 'AutoMod: Invite link').catch(() => {});
+            await this.mod.createCase(message.guild.id, 'AUTOMOD_INVITE', message.client.user.id, message.author.id, 'Posted invite link');
+            metrics.inc('automod_actions', { type: 'invite' });
+            return;
+        }
+        if (cfg.antiSpam) {
+            const now = Date.now();
+            const history = this.spamTracker.get(message.author.id) || [];
+            history.push({ ts: now, content: message.content.slice(0, 100) });
+            const window = history.filter(h => now - h.ts < 7000);
+            this.spamTracker.set(message.author.id, window);
+            if (window.length >= 5) {
+                await message.member.timeout(600000, 'AutoMod: Spam detected').catch(() => {});
+                await this.mod.createCase(message.guild.id, 'AUTOMOD_SPAM', message.client.user.id, message.author.id, 'Rapid message spam');
+                metrics.inc('automod_actions', { type: 'spam' });
+            }
+        }
+    }
+}
+
+// =============================================================
+// USER SERVICE
+// =============================================================
+class UserService {
+    constructor(db, cache, logger) {
+        this.db = db; this.cache = cache; this.log = logger.child({ module: 'UserService' });
+    }
+    async getOrCreate(userId) {
+        const key = `usr:${userId}`;
+        let u = this.cache.get(key);
+        if (u) return u;
+        try {
+            u = await this.db.collection('users').findOne({ userId });
+            if (!u) {
+                u = {
+                    userId, xp: 0, level: 1, elo: 1000, peakElo: 1000,
+                    rank: 'Bronze', streak: 0, balance: 1000, premium: false,
+                    dailyLast: null, dailyStreak: 0, submissions: 0, warns: [],
+                    qualityUses: 0, betHistory: [], totalWagered: 0, totalWon: 0,
+                    totalLost: 0, wins: 0, losses: 0, createdAt: new Date(),
+                    lastActive: new Date(), voiceTime: 0, botBanned: false
+                };
+                await this.db.collection('users').insertOne(u);
+            }
+            this.cache.set(key, u, { hot: true });
+            return u;
+        } catch (err) { this.log.error('User fetch failed', { userId, err: err.message }); throw err; }
+    }
+    async update(userId, update) {
+        const key = `usr:${userId}`;
+        await this.db.collection('users').updateOne({ userId }, { $set: { ...update, lastActive: new Date() } }, { upsert: true });
+        const cached = this.cache.get(key);
+        if (cached) this.cache.set(key, { ...cached, ...update }, { hot: true });
+    }
+    async increment(userId, field, amount) {
+        const key = `usr:${userId}`;
+        await this.db.collection('users').updateOne({ userId }, { $inc: { [field]: amount }, $set: { lastActive: new Date() } });
+        const cached = this.cache.get(key);
+        if (cached) this.cache.set(key, { ...cached, [field]: (cached[field] || 0) + amount }, { hot: true });
+    }
+    async topByElo(limit = 10) {
+        return this.db.collection('users').find({ elo: { $gt: 0 } }).sort({ elo: -1 }).limit(limit).toArray();
+    }
+    async topBy(field, limit = 10) {
+        return this.db.collection('users').find({ [field]: { $gt: 0 } }).sort({ [field]: -1 }).limit(limit).toArray();
+    }
+}
+
 
 // =============================================================
 // GAMBLING HELPERS
 // =============================================================
-const SLOT_SYMBOLS = {
-  cherry:  'Cherry',
-  lemon:   'Lemon',
-  diamond: 'Diamond',
-  seven:   '7',
-  bell:    'Bell',
-  star:    'Star',
-  bar:     'BAR',
-};
-const SLOT_DISPLAY = {
-  cherry: '[Ch]', lemon: '[Le]', diamond: '[Di]',
-  seven: '[7]', bell: '[Be]', star: '[St]', bar: '[BA]',
-};
-
-function spinSlots() {
-  const keys = Object.keys(SLOT_SYMBOLS);
-  // Weighted probabilities (diamond/seven are rarer)
-  const weights = [20, 20, 5, 8, 20, 20, 7];
-  const total   = weights.reduce((a, b) => a + b, 0);
-  const pick    = () => {
-    let rng = Math.random() * total;
-    for (let i = 0; i < keys.length; i++) {
-      rng -= weights[i];
-      if (rng <= 0) return SLOT_DISPLAY[keys[i]];
-    }
-    return SLOT_DISPLAY[keys[0]];
-  };
-  return [pick(), pick(), pick()];
-}
-
-function slotsResult(r) {
-  if (r[0] === r[1] && r[1] === r[2]) {
-    if (r[0] === '[Di]') return { mult: 10, msg: 'JACKPOT! Triple Diamonds!' };
-    if (r[0] === '[7]')  return { mult: 7,  msg: 'LUCKY SEVENS!' };
-    if (r[0] === '[BA]') return { mult: 5,  msg: 'TRIPLE BAR!' };
-    return { mult: 3, msg: 'Three of a kind!' };
-  }
-  if (r[0] === r[1] || r[1] === r[2] || r[0] === r[2])
-    return { mult: 1.5, msg: 'Two of a kind!' };
-  return { mult: 0, msg: 'No match — better luck next time!' };
-}
+const SUITS = ['♠️', '♥️', '♦️', '♣️'];
+const RANKS_CARDS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+const bjGames = new Map();
 
 function drawCard() {
-  const vals  = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
-  const suits = ['S','H','D','C'];
-  return vals[Math.floor(Math.random() * vals.length)] + suits[Math.floor(Math.random() * suits.length)];
-}
-
-function cardVal(card) {
-  const v = card.slice(0, -1);
-  if (['J','Q','K'].includes(v)) return 10;
-  if (v === 'A') return 11;
-  return parseInt(v, 10);
+    return RANKS_CARDS[Math.floor(Math.random() * RANKS_CARDS.length)] + SUITS[Math.floor(Math.random() * SUITS.length)];
 }
 
 function handTotal(hand) {
-  let total = hand.reduce((s, c) => s + cardVal(c), 0);
-  let aces  = hand.filter(c => c.startsWith('A')).length;
-  while (total > 21 && aces > 0) { total -= 10; aces--; }
-  return total;
+    let total = 0, aces = 0;
+    for (const card of hand) {
+        const r = card.slice(0, -2);
+        if (['J', 'Q', 'K'].includes(r)) total += 10;
+        else if (r === 'A') { total += 11; aces++; }
+        else total += parseInt(r);
+    }
+    while (total > 21 && aces > 0) { total -= 10; aces--; }
+    return total;
 }
 
-const bjGames = new Map();
+function spinSlots() {
+    const reels = ['🍒', '🍋', '🍊', '🍇', '💎', '7️⃣', '🔔', '🍉'];
+    return [reels[Math.floor(Math.random() * reels.length)], reels[Math.floor(Math.random() * reels.length)], reels[Math.floor(Math.random() * reels.length)]];
+}
+
+function slotsResult(reels) {
+    const [a, b, c] = reels;
+    if (a === b && b === c) {
+        if (a === '💎') return { mult: 10, msg: 'TRIPLE DIAMONDS — JACKPOT!' };
+        if (a === '7️⃣') return { mult: 8, msg: 'TRIPLE SEVENS!' };
+        return { mult: 4, msg: `Triple ${a}!` };
+    }
+    if (a === b || b === c || a === c) return { mult: 2, msg: 'Pair match!' };
+    if (['🍒', '🍋', '🍊', '🍇', '🍉'].includes(a) && ['🍒', '🍋', '🍊', '🍇', '🍉'].includes(b) && ['🍒', '🍋', '🍊', '🍇', '🍉'].includes(c))
+        return { mult: 1.5, msg: 'All fruits!' };
+    return { mult: 0, msg: 'No match.' };
+}
+
+async function addToJackpot(amount) {
+    const cut = Math.floor(amount * CONFIG.jackpotCut);
+    if (cut <= 0) return;
+    await container.resolve('mongo').collection('jackpot').updateOne(
+        { id: 'main' }, { $inc: { pool: cut } }, { upsert: true }
+    );
+}
+
+async function getJackpot() {
+    const doc = await container.resolve('mongo').collection('jackpot').findOne({ id: 'main' });
+    return doc?.pool || 0;
+}
+
+async function resetJackpot() {
+    await container.resolve('mongo').collection('jackpot').updateOne({ id: 'main' }, { $set: { pool: 0 } }, { upsert: true });
+}
 
 async function recordBet(userId, cmd, bet, result, change) {
-  try {
-    await db.collection('users').updateOne(
-      { userId },
-      {
-        $push: {
-          betHistory: {
-            $each: [{ cmd, bet, result, change, at: new Date() }],
-            $slice: -20,
-          },
-        },
-        $inc: {
-          totalWagered: bet,
-          totalWon:  change > 0 ? change : 0,
-          totalLost: change < 0 ? Math.abs(change) : 0,
-        },
-      }
+    const entry = { cmd, bet, result, change, at: new Date() };
+    const inc = { totalWagered: bet };
+    if (change > 0) { inc.totalWon = change; inc.wins = 1; }
+    else if (change < 0) { inc.totalLost = Math.abs(change); inc.losses = 1; }
+    await container.resolve('mongo').collection('users').updateOne(
+        { userId },
+        { $push: { betHistory: { $each: [entry], $slice: -100 } }, $inc: inc }
     );
-    invalidateCache(userId);
-    await trackEvent('bet', { userId, cmd, bet, change });
-  } catch { /* non-critical */ }
-}
-
-// =============================================================
-// VIDEO PROCESSOR
-// =============================================================
-async function processVideo(url) {
-  const id     = Date.now();
-  const tmpIn  = path.join('/tmp', `in_${id}.mp4`);
-  const tmpOut = path.join('/tmp', `out_${id}.mp4`);
-
-  const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
-  if (!response.ok) throw new Error(`Download failed: ${response.status} ${response.statusText}`);
-
-  const buf = Buffer.from(await response.arrayBuffer());
-  if (buf.length > 500 * 1024 * 1024) throw new Error('File too large (500MB max)');
-  await fs.writeFile(tmpIn, buf);
-
-  await new Promise((resolve, reject) => {
-    const cmd = [
-      `ffmpeg -i "${tmpIn}"`,
-      `-vf "scale=1920:-2:flags=lanczos,unsharp=5:5:1.0:5:5:0.0"`,
-      `-c:v libx264 -crf 18 -preset slow`,
-      `-c:a copy`,
-      `-movflags +faststart`,
-      `"${tmpOut}"`,
-    ].join(' ');
-    exec(cmd, { timeout: 300_000 }, err => err ? reject(err) : resolve());
-  });
-
-  await fs.unlink(tmpIn).catch(() => {});
-  return tmpOut;
-}
-
-// =============================================================
-// AUTO-DELETE HELPER
-// =============================================================
-function autoDelete(msg, secs = CONFIG.autoDeleteSeconds) {
-  if (msg?.deletable) setTimeout(() => msg.delete().catch(() => {}), secs * 1000);
-  return msg;
-}
-
-// =============================================================
-// SUBMISSION SYSTEM — FULLY REBUILT (fixes /submit error)
-// =============================================================
-
-/**
- * Validates whether a string is a plausible media URL.
- * Returns null if valid, or an error string if not.
- */
-function validateSubmissionUrl(url) {
-  try {
-    const u = new URL(url);
-    if (!['http:', 'https:'].includes(u.protocol))
-      return 'URL must use http or https.';
-
-    const allowed = [
-      'cdn.discordapp.com', 'media.discordapp.net',
-      'streamable.com',      'medal.tv',
-      'youtube.com',         'youtu.be',
-      'twitch.tv',           'clips.twitch.tv',
-      'drive.google.com',    'dropbox.com',
-      'gyazo.com',           'imgur.com',
-      'streamff.com',        'jumpshare.com',
-    ];
-
-    if (!allowed.some(d => u.hostname === d || u.hostname.endsWith('.' + d)))
-      return `Domain not allowed. Use: ${allowed.slice(0, 5).join(', ')} etc.`;
-
-    return null; // valid
-  } catch {
-    return 'That does not look like a valid URL. Please paste a proper link.';
-  }
-}
-
-// Pending submissions awaiting modal submission (userId -> { interactionId, data })
-const pendingSubmissions = new Map();
-
-/**
- * Handle /submit slash command.
- * Step 1: Show a modal to collect clip URL + description.
- */
-async function handleSubmitSlash(interaction) {
-  const modal = new ModalBuilder()
-    .setCustomId('submit_modal')
-    .setTitle('Submit Your Clip');
-
-  const urlInput = new TextInputBuilder()
-    .setCustomId('submit_url')
-    .setLabel('Clip URL')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('https://streamable.com/xxxxx  or  Discord CDN link')
-    .setRequired(true)
-    .setMinLength(10)
-    .setMaxLength(512);
-
-  const descInput = new TextInputBuilder()
-    .setCustomId('submit_desc')
-    .setLabel('Description (what makes this clip special?)')
-    .setStyle(TextInputStyle.Paragraph)
-    .setPlaceholder('Describe your clip in a few sentences...')
-    .setRequired(false)
-    .setMinLength(0)
-    .setMaxLength(500);
-
-  const categoryInput = new TextInputBuilder()
-    .setCustomId('submit_category')
-    .setLabel('Category')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('e.g. Highlight, Funny, Montage, Educational')
-    .setRequired(false)
-    .setMaxLength(50);
-
-  modal.addComponents(
-    new ActionRowBuilder().addComponents(urlInput),
-    new ActionRowBuilder().addComponents(descInput),
-    new ActionRowBuilder().addComponents(categoryInput),
-  );
-
-  await interaction.showModal(modal);
-}
-
-/**
- * Handle submit_modal submission — the FIXED core of /submit.
- */
-async function handleSubmitModal(interaction) {
-  // Always defer first to avoid "interaction failed" errors
-  await interaction.deferReply({ ephemeral: true });
-
-  try {
-    const url      = interaction.fields.getTextInputValue('submit_url').trim();
-    const desc     = interaction.fields.getTextInputValue('submit_desc').trim() || 'No description provided.';
-    const category = interaction.fields.getTextInputValue('submit_category').trim() || 'General';
-
-    // Validate URL
-    const urlError = validateSubmissionUrl(url);
-    if (urlError) {
-      return await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xFF4444)
-            .setTitle('Submission Failed')
-            .setDescription(`**Invalid URL:** ${urlError}\n\nPlease use \`/submit\` again with a valid link.`)
-        ],
-      });
-    }
-
-    const userId = interaction.user.id;
-    const user   = await getUser(userId);
-
-    // Rate limit: 3 submissions per 24h for non-premium
-    const recentCount = await db.collection('submissions').countDocuments({
-      userId,
-      submittedAt: { $gte: new Date(Date.now() - 86_400_000) },
+    await container.resolve('mongo').collection('command_logs').insertOne({
+        command: cmd, userId, bet, change, success: change >= 0, timestamp: new Date()
     });
+    metrics.inc('bets_placed', { cmd });
+}
 
-    const dailyLimit = user.premium ? 10 : 3;
-    if (recentCount >= dailyLimit) {
-      return await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xFF8800)
-            .setTitle('Daily Limit Reached')
-            .setDescription(
-              `You've submitted ${recentCount}/${dailyLimit} clips today.\n` +
-              `${user.premium ? '' : 'Premium members can submit up to 10/day!'}`
-            )
-        ],
-      });
-    }
-
-    // Check for duplicate URL
-    const duplicate = await db.collection('submissions').findOne({
-      url, reviewed: false,
-    });
-    if (duplicate) {
-      return await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xFF8800)
-            .setTitle('Duplicate Submission')
-            .setDescription('That clip has already been submitted and is awaiting review!')
-        ],
-      });
-    }
-
-    // Save submission
-    const subDoc = {
-      userId,
-      userTag:     interaction.user.tag,
-      url,
-      description: desc,
-      category,
-      status:      'pending',
-      reviewed:    false,
-      submittedAt: new Date(),
-      guildId:     interaction.guildId,
-      votes:       { up: 0, down: 0 },
-    };
-    const result = await db.collection('submissions').insertOne(subDoc);
-    const subId  = result.insertedId.toString();
-
-    // Update user submission count
-    await db.collection('users').updateOne(
-      { userId }, { $inc: { submissions: 1 } }, { upsert: true }
-    );
-    invalidateCache(userId);
-
-    await trackEvent('submission', { userId, subId, category });
-
-    // Notify review channel
-    const reviewCh = interaction.client.channels.cache.get(CONFIG.reviewChannelId);
-    if (reviewCh) {
-      const reviewEmbed = new EmbedBuilder()
-        .setColor(0x00BCD4)
-        .setTitle('New Clip Submission')
-        .setDescription(`**Submitted by:** <@${userId}> (${interaction.user.tag})`)
-        .addFields(
-          { name: 'Category',    value: category, inline: true },
-          { name: 'Total Clips', value: `${user.submissions + 1}`, inline: true },
-          { name: 'Premium',     value: user.premium ? 'Yes' : 'No', inline: true },
-          { name: 'URL',         value: url },
-          { name: 'Description', value: desc },
-        )
-        .setFooter({ text: `Submission ID: ${subId}` })
-        .setTimestamp();
-
-      const reviewRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`sub_approve_${subId}`)
-          .setLabel('Approve')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`sub_reject_${subId}`)
-          .setLabel('Reject')
-          .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-          .setCustomId(`sub_info_${subId}`)
-          .setLabel('View Info')
-          .setStyle(ButtonStyle.Secondary),
-      );
-
-      await reviewCh.send({ embeds: [reviewEmbed], components: [reviewRow] }).catch(err => {
-        log('WARN', `Could not post to review channel: ${err.message}`);
-      });
-    } else {
-      log('WARN', 'Review channel not configured — submission saved to DB only.');
-    }
-
-    // Success response
-    await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setColor(0x00FF7F)
-          .setTitle('Clip Submitted!')
-          .setDescription(
-            `Your clip has been submitted for review!\n\n` +
-            `**Category:** ${category}\n` +
-            `**Submission ID:** \`${subId}\`\n\n` +
-            `You'll be notified when a moderator reviews it.\n` +
-            `Daily submissions: **${recentCount + 1}/${dailyLimit}**`
-          )
-          .setTimestamp()
-      ],
-    });
-
-    log('SUCCESS', `Submission from ${interaction.user.tag}: ${url}`);
-  } catch (err) {
-    log('ERROR', `handleSubmitModal: ${err.message}\n${err.stack}`);
+async function trackEvent(type, data) {
     try {
-      await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0xFF4444)
-            .setTitle('Submission Error')
-            .setDescription(
-              'An internal error occurred while processing your submission.\n' +
-              'Please try again in a moment. If this persists, contact an admin.\n\n' +
-              `Error: \`${err.message}\``
-            )
-        ],
-      });
-    } catch { /* if even editReply fails */ }
-  }
+        await container.resolve('mongo').collection('analytics').insertOne({
+            type, data, timestamp: new Date()
+        });
+        metrics.inc('events', { type });
+    } catch (e) {}
 }
-
-/**
- * Handle submission review buttons (approve/reject/info).
- */
-async function handleSubmissionReview(interaction, action, subId) {
-  if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
-    return interaction.reply({ content: 'You need Manage Messages permission.', ephemeral: true });
-  }
-
-  await interaction.deferUpdate();
-
-  try {
-    const sub = await db.collection('submissions').findOne({ _id: new ObjectId(subId) });
-    if (!sub) {
-      return interaction.followUp({ content: 'Submission not found (already handled?)', ephemeral: true });
-    }
-    if (sub.reviewed) {
-      return interaction.followUp({ content: 'This submission was already reviewed.', ephemeral: true });
-    }
-
-    if (action === 'info') {
-      return interaction.followUp({
-        ephemeral: true,
-        embeds: [
-          new EmbedBuilder()
-            .setColor(0x3498DB)
-            .setTitle('Submission Details')
-            .addFields(
-              { name: 'User',        value: `<@${sub.userId}> (${sub.userTag})`, inline: true },
-              { name: 'Category',    value: sub.category, inline: true },
-              { name: 'Submitted',   value: `<t:${Math.floor(new Date(sub.submittedAt).getTime() / 1000)}:R>`, inline: true },
-              { name: 'URL',         value: sub.url },
-              { name: 'Description', value: sub.description },
-            )
-            .setFooter({ text: `ID: ${subId}` })
-        ],
-      });
-    }
-
-    const approved = action === 'approve';
-    const eloGain  = approved ? calcElo('A', 1000, 0) : 0;
-
-    await db.collection('submissions').updateOne(
-      { _id: sub._id },
-      {
-        $set: {
-          reviewed: true, status: approved ? 'approved' : 'rejected',
-          reviewedBy: interaction.user.id, reviewedAt: new Date(),
-        },
-      }
-    );
-
-    if (approved && eloGain > 0) {
-      const ud      = await getUser(sub.userId);
-      const newElo  = ud.elo + eloGain;
-      const newPeak = Math.max(ud.peakElo, newElo);
-      await updateUser(sub.userId, {
-        elo: newElo, peakElo: newPeak, wins: ud.wins + 1,
-        rank: getRankFromElo(newElo).name,
-      });
-
-      const guild = interaction.guild;
-      const mem   = await guild.members.fetch(sub.userId).catch(() => null);
-      if (mem) await applyRank(guild, mem, newElo);
-    }
-
-    // DM the submitter
-    const notifyEmbed = new EmbedBuilder()
-      .setColor(approved ? 0x00FF7F : 0xFF4444)
-      .setTitle(`Clip ${approved ? 'Approved' : 'Rejected'}`)
-      .setDescription(
-        approved
-          ? `Your clip was approved! +${eloGain} ELO gained.`
-          : 'Your clip was not approved this time. Keep trying!'
-      );
-
-    const submitter = await interaction.client.users.fetch(sub.userId).catch(() => null);
-    if (submitter) await submitter.send({ embeds: [notifyEmbed] }).catch(() => {});
-
-    await trackEvent('submission_reviewed', {
-      subId, reviewerId: interaction.user.id, approved,
-    });
-
-    // Update the review message
-    const updatedEmbed = EmbedBuilder.from(interaction.message.embeds[0])
-      .setColor(approved ? 0x00FF7F : 0xFF4444)
-      .setTitle(`[${approved ? 'APPROVED' : 'REJECTED'}] Clip Submission`)
-      .addFields({ name: 'Reviewed By', value: interaction.user.tag, inline: true });
-
-    await interaction.message.edit({ embeds: [updatedEmbed], components: [] }).catch(() => {});
-
-  } catch (err) {
-    log('ERROR', `handleSubmissionReview: ${err.message}`);
-    await interaction.followUp({ content: `Error: ${err.message}`, ephemeral: true });
-  }
-}
-
-// =============================================================
-// COMMAND TOGGLE SYSTEM
-// =============================================================
-function isCommandDisabled(cmd) {
-  return CONFIG.disabledCommands.has(cmd);
-}
-
-async function setCommandEnabled(cmd, enabled) {
-  if (enabled) CONFIG.disabledCommands.delete(cmd);
-  else         CONFIG.disabledCommands.add(cmd);
-
-  await db.collection('settings').updateOne(
-    { key: 'disabled_commands' },
-    { $set: { value: Array.from(CONFIG.disabledCommands), updatedAt: new Date() } },
-    { upsert: true }
-  );
-  log('ADMIN', `Command "${cmd}" ${enabled ? 'ENABLED' : 'DISABLED'}`);
-}
-
-// =============================================================
-// HELP REGISTRY
-// =============================================================
-const HELP = {
-  balance:    { desc: 'Check your coin balance',           usage: '!balance' },
-  daily:      { desc: 'Claim daily coins + streak bonus',  usage: '!daily' },
-  history:    { desc: 'View last 20 bets',                 usage: '!history' },
-  coinflip:   { desc: 'Flip a coin bet',                   usage: '!coinflip <amount> <heads|tails>' },
-  bet:        { desc: 'Dice roll — win on 4+',             usage: '!bet <amount>' },
-  dice:       { desc: 'Alias for !bet',                    usage: '!dice <amount>' },
-  slots:      { desc: 'Slot machine',                      usage: '!slots <amount>' },
-  roulette:   { desc: 'Bet on red/black/green',            usage: '!roulette <amount> <color>' },
-  blackjack:  { desc: 'Play blackjack vs dealer',          usage: '!blackjack <amount>' },
-  spin:       { desc: 'Prize wheel spin',                  usage: '!spin <amount>' },
-  allin:      { desc: 'Go all-in on a dice roll',          usage: '!allin' },
-  jackpot:    { desc: 'View current jackpot pool',         usage: '!jackpot' },
-  rankcard:   { desc: 'View your rank card',               usage: '!rankcard [@user]' },
-  submit:     { desc: 'Submit a clip for review',          usage: '!submit (or /submit)' },
-  quality:    { desc: 'AI upscale a video',                usage: '!quality <url>' },
-  code:       { desc: 'Generate code (Owner only)',        usage: '!code' },
-  snipe:      { desc: 'Show last deleted message',         usage: '!snipe' },
-  kick:       { desc: 'Kick a member',                     usage: '!kick @user [reason]' },
-  ban:        { desc: 'Ban a member',                      usage: '!ban @user [reason]' },
-  mute:       { desc: 'Timeout a member (10 min)',         usage: '!mute @user [reason]' },
-  unmute:     { desc: 'Remove a timeout',                  usage: '!unmute @user' },
-  warn:       { desc: 'Warn a member',                     usage: '!warn @user [reason]' },
-  clear:      { desc: 'Bulk delete messages',              usage: '!clear <1–100>' },
-  lock:       { desc: 'Lock a channel',                    usage: '!lock' },
-  unlock:     { desc: 'Unlock a channel',                  usage: '!unlock' },
-  slowmode:   { desc: 'Set channel slowmode',              usage: '!slowmode <seconds>' },
-  stats:      { desc: 'View bot statistics',               usage: '!stats' },
-  leaderboard:{ desc: 'Top 10 by balance or ELO',         usage: '!leaderboard [balance|elo|level]' },
-  giveaway:   { desc: 'Start a giveaway',                  usage: '!giveaway <duration> <winners> <prize>' },
-  help:       { desc: 'Show command list',                 usage: '!help [command]' },
-};
-const ALL_COMMANDS = Object.keys(HELP);
 
 // =============================================================
 // DISCORD CLIENT
 // =============================================================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildPresences,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildMessageReactions,
-  ],
-  partials: [
-    Partials.Channel, Partials.Message,
-    Partials.Reaction, Partials.GuildMember,
-  ],
-  failIfNotExists: false,
+    intents: [
+        GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMessageReactions, GatewayIntentBits.GuildPresences
+    ],
+    partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.GuildMember, Partials.User],
+    sweepers: {
+        messages: { interval: 300, lifetime: 1800 },
+        users: { interval: 3600, filter: () => user => !user.bot },
+        guildMembers: { interval: 3600, filter: () => member => !member.user?.bot }
+    },
+    failIfNotExists: false,
+    rest: { timeout: 15_000, retries: 3 }
 });
 
-// =============================================================
-// EXPORTS (for other modules)
-// =============================================================
-module.exports = {
-  client, CONFIG, get db() { return db; }, log, logBuffer,
-  getUser, updateUser, addBalance, invalidateCache, userCache,
-  getRankFromElo, calcElo, applyRank, RANKS, guildRankRoles,
-  addToJackpot, getJackpot, resetJackpot,
-  snipeCache, giveawayTimers, startGiveaway, endGiveaway,
-  bjGames, spinSlots, slotsResult, drawCard, handTotal, recordBet,
-  processVideo, autoDelete, ObjectId,
-  HELP, ALL_COMMANDS,
-  isCommandDisabled, setCommandEnabled,
-  modLog, trackEvent, logCommand,
-  assignAutoRoleToAll, assignAutoRoleOnJoin,
-  checkRateLimit, COOLDOWNS, rateLimits,
-  connectDB, bootSequence, resumeGiveaways,
-  autoDetectRankRoles, autoDetectChannels,
-  handleXP, fuzzyMatch, levenshtein,
-  handleSubmitSlash, handleSubmitModal, handleSubmissionReview,
-  validateSubmissionUrl,
+const snipeCache = new LRUCache(500, 300000);
+const autoDelete = async (msg, secs = CONFIG.autoDeleteSeconds) => {
+    if (msg?.deletable) setTimeout(() => msg.delete().catch(() => {}), secs * 1000);
 };
 
+const VIDEO_LINK_REGEX = /https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/|streamable\.com\/|tiktok\.com\/|cdn\.discordapp\.com\/|media\.discordapp\.net\/|tenor\.com\/|giphy\.com\/media\/|gyazo\.com\/|clips\.twitch\.tv\/)/gi;
+
 // =============================================================
-// MESSAGE HANDLER
+// SERVICE WIRING
+// =============================================================
+container.register('mongo', () => new MongoManager(CONFIG.mongoUri, CONFIG.dbName), { singleton: true });
+container.register('cache', () => new CacheManager(CONFIG.cacheTTL, CONFIG.cacheSize), { singleton: true });
+container.register('rateLimiter', () => new TokenBucket(5, 5000), { singleton: true });
+container.register('userService', c => new UserService(c.resolve('mongo').db, c.resolve('cache'), logger), { singleton: true });
+container.register('rankEngine', c => new RankEngine(c.resolve('mongo').db, logger), { singleton: true });
+container.register('modSuite', c => new ModerationSuite(c.resolve('mongo').db, logger), { singleton: true });
+container.register('giveawayEngine', c => new GiveawayEngine(c.resolve('mongo').db, client, logger), { singleton: true });
+container.register('xpSystem', c => new XPSystem(c.resolve('mongo').db, c.resolve('cache'), logger), { singleton: true });
+container.register('guildConfig', c => new GuildConfigEngine(c.resolve('mongo').db, c.resolve('cache'), logger), { singleton: true });
+container.register('videoQueue', () => new AsyncQueue(CONFIG.workerConcurrency), { singleton: true });
+container.register('videoEngine', c => new CinematicProcessor(c.resolve('videoQueue'), logger), { singleton: true });
+container.register('autoMod', c => new AutoModEngine(c.resolve('mongo').db, c.resolve('modSuite'), logger), { singleton: true });
+container.register('commandRegistry', () => {
+    const reg = new CommandRegistry(logger);
+    reg.use(async (ctx) => {
+        if (ctx.def.ownerOnly && !CONFIG.ownerIds.includes(ctx.message.author.id)) {
+            autoDelete(await ctx.message.reply('Owner only.')); return false;
+        }
+        if (ctx.def.mod && !ctx.message.member.permissions.has(ctx.def.permission || PermissionFlagsBits.ManageMessages)) {
+            autoDelete(await ctx.message.reply('Insufficient permissions.')); return false;
+        }
+        return true;
+    });
+    reg.use(async (ctx) => {
+        if (CONFIG.disabledCommands.has(ctx.cmd)) {
+            autoDelete(await ctx.message.reply('This command is currently disabled.')); return false;
+        }
+        if (!ctx.def.cooldown) return true;
+        const bucket = container.resolve('rateLimiter');
+        const rl = bucket.consume(`${ctx.cmd}:${ctx.message.author.id}`, 1);
+        if (!rl.allowed) {
+            autoDelete(await ctx.message.reply(`Cooldown: ${Math.ceil(rl.retryAfter / 1000)}s remaining.`)); return false;
+        }
+        return true;
+    });
+    return reg;
+}, { singleton: true });
+
+// =============================================================
+// MOD LOG HELPER
+// =============================================================
+async function modLog(guild, action, moderator, target, reason = 'No reason') {
+    try {
+        const cfg = await container.resolve('guildConfig').get(guild.id);
+        const ch = guild.channels.cache.get(cfg.logChannelId || CONFIG.logChannelId);
+        if (!ch) return;
+        const embed = new EmbedBuilder().setColor(0xFF4444).setTitle(`Mod Action: ${action}`)
+            .addFields(
+                { name: 'Moderator', value: `${moderator.tag} (${moderator.id})`, inline: true },
+                { name: 'Target', value: target.tag ? `${target.tag} (${target.id})` : target.id || 'N/A', inline: true },
+                { name: 'Reason', value: reason }
+            ).setTimestamp();
+        await ch.send({ embeds: [embed] });
+    } catch (err) { log('WARN', `modLog: ${err.message}`); }
+}
+
+// =============================================================
+// AUTO ROLE HELPER
+// =============================================================
+async function assignAutoRoleToAll(guild) {
+    let assigned = 0, skipped = 0, failed = 0;
+    if (!CONFIG.autoRoleId) return { assigned, skipped, failed };
+    const members = await guild.members.fetch();
+    for (const [, member] of members) {
+        if (member.user.bot) { skipped++; continue; }
+        if (member.roles.cache.has(CONFIG.autoRoleId)) { skipped++; continue; }
+        try { await member.roles.add(CONFIG.autoRoleId); assigned++; }
+        catch (e) { failed++; }
+    }
+    return { assigned, skipped, failed };
+}
+
+// =============================================================
+// COMMAND TOGGLE HELPERS
+// =============================================================
+function isCommandDisabled(cmd) { return CONFIG.disabledCommands.has(cmd); }
+function setCommandEnabled(cmd, enabled) {
+    if (enabled) CONFIG.disabledCommands.delete(cmd);
+    else CONFIG.disabledCommands.add(cmd);
+}
+
+// =============================================================
+// PROCESS VIDEO HELPER (legacy compat)
+// =============================================================
+const processVideo = (url, opts) => container.resolve('videoEngine').process(url, opts);
+
+// =============================================================
+// DISCORD EVENT HANDLERS
 // =============================================================
 client.on('messageCreate', async message => {
-  if (message.author.bot) return;
-  handleXP(message).catch(() => {});
+    if (message.author.bot || !message.guild) return;
+    metrics.inc('messages_seen');
 
-  if (!message.content.startsWith(CONFIG.prefix)) return;
+    const autoMod = container.resolve('autoMod');
+    if (autoMod) await autoMod.scan(message).catch(() => {});
 
-  const args = message.content.slice(CONFIG.prefix.length).trim().split(/\s+/);
-  let cmd    = args.shift().toLowerCase();
-
-  // Command routing
-  if (!ALL_COMMANDS.includes(cmd)) {
-    const match = fuzzyMatch(cmd, ALL_COMMANDS);
-    if (match) {
-      autoDelete(await message.reply(`Did you mean \`!${match}\`?`));
-      cmd = match;
-    } else {
-      autoDelete(await message.reply('Unknown command. Type `!help` for a list.'));
-      return;
+    const xpSys = container.resolve('xpSystem');
+    const cfg = await container.resolve('guildConfig').get(message.guild.id);
+    const xpRes = await xpSys.grantMessageXP(message.author.id, message.guild.id, cfg?.xpMultiplier || 1);
+    if (xpRes?.leveled) {
+        const embed = new EmbedBuilder().setColor(0xFFD700).setTitle('LEVEL UP!')
+            .setDescription(`${message.author} reached **Level ${xpRes.newLevel}**!`);
+        autoDelete(await message.channel.send({ embeds: [embed] }), 15);
     }
-  }
 
-  // Disabled command check
-  if (isCommandDisabled(cmd) && !CONFIG.ownerIds.includes(message.author.id)) {
-    autoDelete(await message.reply(
-      `Command \`!${cmd}\` is currently disabled by an administrator.`
-    ));
-    await logCommand(message.author.id, cmd, args, false, message.guild?.id);
-    return;
-  }
+    // Auto-submit on mention
+    if (message.mentions.has(client.user.id)) {
+        const links = message.content.match(VIDEO_LINK_REGEX);
+        if (links?.length) {
+            const bucket = container.resolve('rateLimiter');
+            const rl = bucket.consume(`submit:${message.author.id}`, 1);
+            if (!rl.allowed) { autoDelete(await message.reply(`Rate limited. Try again in ${Math.ceil(rl.retryAfter / 1000)}s.`), 5); return; }
+            const reviewCfg = await container.resolve('guildConfig').get(message.guild.id);
+            const reviewCh = message.guild.channels.cache.get(reviewCfg.reviewChannelId || CONFIG.reviewChannelId);
+            if (reviewCh) {
+                const ins = await container.resolve('mongo').collection('submissions').insertOne({
+                    userId: message.author.id, url: links[0], description: 'Auto-detected mention submission',
+                    reviewed: false, submittedAt: new Date(), guildId: message.guild.id
+                });
+                const embed = new EmbedBuilder().setColor(Colors.Gold).setTitle('New Auto Submission')
+                    .setDescription(`**Link:** ${links[0]}\n**By:** ${message.author.tag}`)
+                    .setFooter({ text: `ID: ${ins.insertedId}` });
+                const row = new ActionRowBuilder().addComponents(
+                    ['A', 'S', 'SS', 'SSS'].map(r => new ButtonBuilder().setCustomId(`rate_${ins.insertedId}_${r}`).setLabel(r).setStyle(ButtonStyle.Primary))
+                );
+                await reviewCh.send({ embeds: [embed], components: [row] });
+                autoDelete(await message.reply('Auto-submission forwarded to review panel.'), 8);
+            }
+        }
+    }
 
-  // Rate limit check
-  const remaining = checkRateLimit(message.author.id, cmd);
-  if (remaining !== null) {
-    autoDelete(await message.reply(
-      `Slow down! Wait **${(remaining / 1000).toFixed(1)}s** before using \`!${cmd}\` again.`
-    ));
-    return;
-  }
+    // Prefix commands
+    if (!message.content.startsWith(CONFIG.prefix)) return;
+    const args = message.content.slice(CONFIG.prefix.length).trim().split(/\s+/);
+    const cmd = args.shift().toLowerCase();
 
-  const handleCommand = require('./commands');
-  try {
-    await handleCommand(message, cmd, args);
-    await logCommand(message.author.id, cmd, args, true, message.guild?.id);
-  } catch (err) {
-    log('ERROR', `Cmd "${cmd}": ${err.message}`);
-    await logCommand(message.author.id, cmd, args, false, message.guild?.id);
-    try {
-      autoDelete(await message.reply('Something went wrong. Please try again.'));
-    } catch { /* ignore */ }
-  }
+    const registry = container.resolve('commandRegistry');
+    const ctx = { message, args, cmd, client };
+    try { await registry.dispatch(ctx); }
+    catch (err) { autoDelete(await message.reply('An error occurred processing that command.')); }
 });
 
-// =============================================================
-// EVENT HANDLERS
-// =============================================================
 client.on('messageDelete', message => {
-  if (!message.author || message.author.bot || !message.content) return;
-  snipeCache.set(message.channelId, {
-    content:    message.content,
-    author:     message.author.tag,
-    avatarURL:  message.author.displayAvatarURL(),
-    at:         new Date(),
-  });
+    if (message.author?.bot || !message.content) return;
+    snipeCache.set(message.channelId, {
+        content: message.content, author: message.author.tag,
+        avatarURL: message.author.displayAvatarURL(), at: new Date()
+    });
+});
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const xpSys = container.resolve('xpSystem');
+    if (!oldState.channelId && newState.channelId) xpSys.voiceJoin(newState.guild.id, newState.member.id);
+    else if (oldState.channelId && !newState.channelId) xpSys.voiceLeave(oldState.guild.id, oldState.member.id);
 });
 
 client.on('guildMemberAdd', async member => {
-  await assignAutoRoleOnJoin(member);
-  try {
-    await getUser(member.id);  // Ensure user doc exists
-    log('INFO', `New member: ${member.user.tag} in "${member.guild.name}"`);
-  } catch { /* non-critical */ }
-});
-
-client.on('guildMemberUpdate', async (oldMember, newMember) => {
-  try {
-    const wasBoosting = !!oldMember.premiumSince;
-    const isBoosting  = !!newMember.premiumSince;
-
-    if (!wasBoosting && isBoosting) {
-      const code = 'BOOST-' + crypto.randomBytes(3).toString('hex').toUpperCase();
-      await db.collection('codes').insertOne({
-        code, userId: newMember.id, used: false,
-        type: 'boost', createdAt: new Date(),
-      });
-      await updateUser(newMember.id, { premium: true });
-      await newMember.send(`Thanks for boosting! Your reward code: \`${code}\``).catch(() => {});
-      await trackEvent('boost_start', { userId: newMember.id });
-      log('INFO', `Boost started: ${newMember.user.tag}`);
+    const cfg = await container.resolve('guildConfig').get(member.guild.id);
+    if (cfg?.welcomeChannelId && cfg?.welcomeMessage) {
+        const ch = member.guild.channels.cache.get(cfg.welcomeChannelId);
+        if (ch) ch.send(cfg.welcomeMessage.replace('{user}', `<@${member.id}>`).replace('{guild}', member.guild.name)).catch(() => {});
     }
-
-    if (wasBoosting && !isBoosting) {
-      await updateUser(newMember.id, { premium: false });
-      await newMember.send('Your server boost has ended. Premium perks have been removed.').catch(() => {});
-      await trackEvent('boost_end', { userId: newMember.id });
+    if (cfg?.autoRoles?.length) {
+        for (const roleId of cfg.autoRoles) await member.roles.add(roleId).catch(() => {});
     }
-  } catch (err) {
-    log('ERROR', `guildMemberUpdate: ${err.message}`);
-  }
-});
-
-// Interaction handler — FULLY handles /submit modal + review buttons
-client.on('interactionCreate', async interaction => {
-  try {
-    // ── Slash Commands ──
-    if (interaction.isChatInputCommand()) {
-      if (interaction.commandName === 'submit') {
-        await handleSubmitSlash(interaction);
-        return;
-      }
-      // Delegate all other slash commands
-      const handleSlash = require('./interactions');
-      await handleSlash(interaction);
-      return;
-    }
-
-    // ── Modal Submissions ──
-    if (interaction.isModalSubmit()) {
-      if (interaction.customId === 'submit_modal') {
-        await handleSubmitModal(interaction);
-        return;
-      }
-      // Delegate other modals
-      const handleSlash = require('./interactions');
-      await handleSlash(interaction);
-      return;
-    }
-
-    // ── Button Interactions ──
-    if (interaction.isButton()) {
-      const { customId } = interaction;
-
-      // Submission review buttons
-      if (customId.startsWith('sub_approve_') || customId.startsWith('sub_reject_') || customId.startsWith('sub_info_')) {
-        const parts  = customId.split('_');
-        const action = parts[1]; // approve | reject | info
-        const subId  = parts[2];
-        await handleSubmissionReview(interaction, action, subId);
-        return;
-      }
-
-      // Giveaway entry buttons
-      if (customId.startsWith('gw_enter_')) {
-        const gwId = customId.slice('gw_enter_'.length);
-        await interaction.deferReply({ ephemeral: true });
-        try {
-          const gw = await db.collection('giveaways').findOne({
-            _id: new ObjectId(gwId), ended: false,
-          });
-          if (!gw) {
-            return interaction.editReply({ content: 'This giveaway has ended!' });
-          }
-          if (gw.entries.includes(interaction.user.id)) {
-            return interaction.editReply({ content: 'You are already entered!' });
-          }
-          await db.collection('giveaways').updateOne(
-            { _id: gw._id },
-            { $push: { entries: interaction.user.id } }
-          );
-          await interaction.editReply({
-            content: `You entered the giveaway for **${gw.prize}**! Good luck!`,
-          });
-        } catch (err) {
-          await interaction.editReply({ content: `Error: ${err.message}` });
-        }
-        return;
-      }
-
-      // Delegate other buttons
-      const handleSlash = require('./interactions');
-      await handleSlash(interaction);
-      return;
-    }
-
-    // ── Select Menus / Autocomplete ──
-    const handleSlash = require('./interactions');
-    if (handleSlash) await handleSlash(interaction);
-
-  } catch (err) {
-    log('ERROR', `interactionCreate: ${err.message}\n${err.stack}`);
-    try {
-      const reply = {
-        content: 'An unexpected error occurred. Please try again.',
-        ephemeral: true,
-      };
-      if (interaction.replied || interaction.deferred) {
-        await interaction.followUp(reply).catch(() => {});
-      } else {
-        await interaction.reply(reply).catch(() => {});
-      }
-    } catch { /* last resort — swallow */ }
-  }
 });
 
 // =============================================================
-// SAFETY NETS
+// EXPORTS (everything other files require)
 // =============================================================
-process.on('unhandledRejection', err => {
-  log('ERROR', `Unhandled rejection: ${err?.message || err}`);
+const dbProxy = new Proxy({}, {
+    get(_, prop) {
+        const m = container.resolve('mongo');
+        if (!m.db) throw new Error('Mongo not connected yet');
+        return m.db[prop];
+    }
 });
-process.on('uncaughtException', err => {
-  log('ERROR', `Uncaught exception: ${err?.message || err}`);
-  // Don't exit — keep bot alive
-});
+
+module.exports = {
+    CONFIG,
+    client,
+    get db() { return container.resolve('mongo').db; },
+    ObjectId,
+    log,
+    logger,
+    metrics,
+    health,
+    container,
+
+    // User helpers
+    getUser: (userId) => container.resolve('userService').getOrCreate(userId),
+    updateUser: (userId, update) => container.resolve('userService').update(userId, update),
+    addBalance: (userId, amount) => container.resolve('userService').increment(userId, 'balance', amount),
+
+    // Rank helpers
+    getRankFromElo: (elo) => container.resolve('rankEngine').getRank(elo),
+    calcElo: (rating, currentElo, streak, peakElo) => container.resolve('rankEngine').calcEloChange(rating, currentElo, streak, peakElo),
+    applyRank: async (guild, member, elo) => {
+        const cfg = await container.resolve('guildConfig').get(guild.id);
+        return container.resolve('rankEngine').applyRankRoles(guild, member, elo, cfg?.rankRoles);
+    },
+    RANKS: [
+        { name: 'Bronze', elo: 0, color: 0x8d6e63 },
+        { name: 'Silver', elo: 1200, color: 0xb0bec5 },
+        { name: 'Gold', elo: 1800, color: 0xf1c40f },
+        { name: 'Platinum', elo: 2500, color: 0x00bcd4 },
+        { name: 'Diamond', elo: 3500, color: 0x3498db },
+        { name: 'Master', elo: 4800, color: 0x9b59b6 },
+        { name: 'Legend', elo: 6500, color: 0xe74c3c },
+    ],
+
+    // Video
+    processVideo,
+
+    // Mod
+    modLog,
+    startGiveaway: (channel, prize, winners, durationMs, hostedById) =>
+        container.resolve('giveawayEngine').start(channel, prize, winners, durationMs, hostedById),
+
+    // Cache / memory
+    snipeCache,
+    userCache: {
+        get size() { return container.resolve('cache').l1.cache.size; }
+    },
+
+    // Security
+    SecurityManager,
+
+    // Auto-delete
+    autoDelete,
+
+    // Gambling
+    bjGames,
+    drawCard,
+    handTotal,
+    recordBet,
+    addToJackpot,
+    getJackpot,
+    resetJackpot,
+    spinSlots,
+    slotsResult,
+
+    // Event tracking
+    trackEvent,
+
+    // Command management
+    isCommandDisabled,
+    setCommandEnabled,
+    get HELP() { return container.resolve('commandRegistry').HELP; },
+    get ALL_COMMANDS() { return Array.from(container.resolve('commandRegistry').commands.keys()).filter(k => !container.resolve('commandRegistry').commands.get(k).isAlias); },
+
+    // Role sync
+    assignAutoRoleToAll,
+
+    // Log buffer
+    get logBuffer() { return logger.getBuffer(); },
+
+    // Container access for advanced use
+    get container() { return container; },
+};
 
 // =============================================================
-// SLASH COMMAND REGISTRATION
-// ─── Deletes ALL old global commands before re-registering ───
-// =============================================================
-async function registerSlash() {
-  if (!CONFIG.token || !CONFIG.clientId) {
-    log('WARN', 'DISCORD_TOKEN or CLIENT_ID not set — skipping slash registration');
-    return;
-  }
-
-  const rest = new REST({ version: '10' }).setToken(CONFIG.token);
-
-  try {
-    // STEP 1: Wipe every existing global slash command
-    log('INFO', 'Clearing all existing global slash commands...');
-    const existing = await rest.get(Routes.applicationCommands(CONFIG.clientId));
-    if (Array.isArray(existing) && existing.length > 0) {
-      await Promise.all(
-        existing.map(cmd =>
-          rest.delete(Routes.applicationCommand(CONFIG.clientId, cmd.id))
-            .then(() => log('INFO', `  Deleted: /${cmd.name}`))
-            .catch(err => log('WARN', `  Failed to delete /${cmd.name}: ${err.message}`))
-        )
-      );
-      log('SUCCESS', `Purged ${existing.length} stale slash command(s)`);
-    } else {
-      log('INFO', 'No existing slash commands to purge');
-    }
-
-    // STEP 2: Register fresh commands
-    let slashDefs;
-    try {
-      slashDefs = require('./slashDefs');
-    } catch (err) {
-      log('ERROR', `slashDefs.js not found or has syntax error: ${err.message}`);
-      slashDefs = getBuiltinSlashDefs();
-    }
-
-    await rest.put(Routes.applicationCommands(CONFIG.clientId), { body: slashDefs });
-    log('SUCCESS', `Registered ${slashDefs.length} slash command(s)`);
-
-    // Also wipe guild-specific commands (cleans up dev leftovers)
-    for (const guild of client.guilds.cache.values()) {
-      try {
-        await rest.put(Routes.applicationGuildCommands(CONFIG.clientId, guild.id), { body: [] });
-        log('INFO', `Cleared guild commands for "${guild.name}"`);
-      } catch { /* guild may not be accessible */ }
-    }
-
-  } catch (err) {
-    log('ERROR', `registerSlash: ${err.message}`);
-  }
-}
-
-/**
- * Fallback slash command definitions if slashDefs.js is missing.
- * Includes a properly defined /submit command.
- */
-function getBuiltinSlashDefs() {
-  log('INFO', 'Using built-in slash command definitions');
-  return [
-    new SlashCommandBuilder()
-      .setName('submit')
-      .setDescription('Submit a clip for review — opens a form for URL + description')
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('balance')
-      .setDescription('Check your coin balance')
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('rankcard')
-      .setDescription('View your rank card')
-      .addUserOption(o => o.setName('user').setDescription('Target user').setRequired(false))
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('leaderboard')
-      .setDescription('View the top players')
-      .addStringOption(o =>
-        o.setName('type')
-          .setDescription('Leaderboard type')
-          .setRequired(false)
-          .addChoices(
-            { name: 'Balance', value: 'balance' },
-            { name: 'ELO',     value: 'elo' },
-            { name: 'Level',   value: 'level' },
-          )
-      )
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('daily')
-      .setDescription('Claim your daily coins')
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('stats')
-      .setDescription('View bot statistics')
-      .toJSON(),
-
-    new SlashCommandBuilder()
-      .setName('help')
-      .setDescription('Show all commands')
-      .addStringOption(o =>
-        o.setName('command')
-          .setDescription('Specific command to look up')
-          .setRequired(false)
-      )
-      .toJSON(),
-  ];
-}
-
-// =============================================================
-// LAUNCH SEQUENCE
+// BOOT SEQUENCE
 // =============================================================
 (async () => {
-  try {
-    await bootSequence();
-    await connectDB();
-
-    // Start Express API server
     try {
-      const startApiServer = require('./api');
-      startApiServer();
-    } catch (err) {
-      log('WARN', `API server failed to start: ${err.message}`);
-    }
+        console.clear();
+        log('INFO', '╔══════════════════════════════════════════════════╗');
+        log('INFO', '║  GOD MODE BOT v8 — INFINITY EDITION              ║');
+        log('INFO', '║  Cinematic Engine | Circuit Breakers | DI | WS  ║');
+        log('INFO', '╚══════════════════════════════════════════════════╝');
 
-    await client.login(CONFIG.token);
+        const mongo = container.resolve('mongo');
+        await mongo.connect();
+        health.register('mongodb', async () => { if (!mongo.connected) throw new Error('Mongo disconnected'); });
 
-    client.once('ready', async () => {
-      log('SUCCESS', `${client.user.tag} is ONLINE — ${client.guilds.cache.size} guild(s)`);
+        const cache = container.resolve('cache');
+        const videoEngine = container.resolve('videoEngine');
+        const giveawayEngine = container.resolve('giveawayEngine');
+        const guildConfig = container.resolve('guildConfig');
 
-      const activities = [
-        { name: 'GOD MODE v5 | /help', type: ActivityType.Playing },
-        { name: `${client.guilds.cache.size} servers`,  type: ActivityType.Watching },
-      ];
-      let actIdx = 0;
-      client.user.setActivity(activities[0].name, { type: activities[0].type });
-      setInterval(() => {
-        actIdx = (actIdx + 1) % activities.length;
-        client.user.setActivity(activities[actIdx].name, { type: activities[actIdx].type });
-      }, 60_000);
+        // Load commands from commands.js
+        const defineCommands = require('./commands');
+        const registry = container.resolve('commandRegistry');
+        defineCommands(registry);
 
-      // Register slash commands (with purge) after client is ready
-      // so guild list is populated for guild command cleanup
-      await registerSlash();
+        // Load interactions from interactions.js
+        require('./interactions')(client);
 
-      // Per-guild initialization
-      const initPromises = [];
-      for (const guild of client.guilds.cache.values()) {
-        initPromises.push(
-          (async () => {
-            try {
-              await Promise.all([guild.roles.fetch(), guild.channels.fetch()]);
-              await autoDetectRankRoles(guild);
-              await autoDetectChannels(guild);
-              log('INFO', `Assigning auto-role in "${guild.name}"...`);
-              assignAutoRoleToAll(guild).catch(() => {});
-            } catch (err) {
-              log('ERROR', `Guild init "${guild.name}": ${err.message}`);
+        // Load API server from api.js
+        const startApiServer = require('./api');
+        startApiServer();
+
+        // Register slash commands
+        const slashDefs = require('./slashDefs');
+        const rest = new REST({ version: '10' }).setToken(CONFIG.token);
+        await rest.put(Routes.applicationCommands(CONFIG.clientId), { body: slashDefs });
+        log('SUCCESS', 'Slash commands registered globally', { count: slashDefs.length });
+
+        client.once('ready', async () => {
+            log('SUCCESS', `Discord connected: ${client.user.tag}`, { guilds: client.guilds.cache.size });
+            setInterval(() => {
+                client.user.setActivity(`${client.guilds.cache.size} guilds | !help`, { type: ActivityType.Watching });
+            }, 30000);
+
+            for (const guild of client.guilds.cache.values()) {
+                try {
+                    await guildConfig.get(guild.id);
+                    const targets = container.resolve('rankEngine').RANKS.map(r => r.name);
+                    const roles = {};
+                    for (const t of targets) {
+                        const role = guild.roles.cache.find(r => r.name.toLowerCase() === t.toLowerCase());
+                        if (role) { roles[t] = role.id; log('INFO', `Detected role ${t} in ${guild.name}`); }
+                    }
+                    if (Object.keys(roles).length) await guildConfig.set(guild.id, { rankRoles: roles });
+                    const findCh = pats => guild.channels.cache.find(c => c.isTextBased() && pats.some(p => c.name.toLowerCase().includes(p)));
+                    const rCh = findCh(['clip-review', 'submissions', 'review']);
+                    const lCh = findCh(['mod-logs', 'modlogs', 'logs']);
+                    const wCh = findCh(['welcome', 'general']);
+                    const updates = {};
+                    if (rCh) updates.reviewChannelId = rCh.id;
+                    if (lCh) updates.logChannelId = lCh.id;
+                    const existingCfg = await guildConfig.get(guild.id);
+                    if (wCh && !existingCfg.welcomeChannelId) updates.welcomeChannelId = wCh.id;
+                    if (Object.keys(updates).length) await guildConfig.set(guild.id, updates);
+                } catch (e) { log('WARN', 'Guild init error', { guild: guild.id, err: e.message }); }
             }
-          })()
-        );
-      }
-      await Promise.all(initPromises);
 
-      await resumeGiveaways();
+            await giveawayEngine.resumeAll();
+            setInterval(() => videoEngine.cleanupOldJobs(), 600000);
+            setInterval(() => cache.maybeEvict(), 30000);
+            log('SUCCESS', '>> ALL SYSTEMS OPERATIONAL — MAX OUTPUT REACHED');
+        });
 
-      log('SUCCESS', '>> BOT FULLY OPERATIONAL — ALL SYSTEMS GO');
-    });
-
-  } catch (err) {
-    log('ERROR', `FATAL STARTUP ERROR: ${err.message}\n${err.stack}`);
-    process.exit(1);
-  }
+        await client.login(CONFIG.token);
+    } catch (err) {
+        log('FATAL', 'FATAL STARTUP CRASH', err.stack);
+        process.exit(1);
+    }
 })();
