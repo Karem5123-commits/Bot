@@ -1,8 +1,8 @@
 [phases.setup]
-nixPkgs = ["nodejs", "ffmpeg"]
+nixPkgs = ['nodejs_20', 'ffmpeg']
 
-[phases.install]
-cmds = ["npm install"]
+[phases.build]
+cmds = ['npm ci']
 
 [start]
-cmd = "node main.js"
+cmd = 'node main.js'
